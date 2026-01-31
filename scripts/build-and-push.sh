@@ -151,9 +151,10 @@ build_moltbook() {
 
   MOLTBOOK_DIR="/tmp/moltbook-api-build"
 
-  log_info "Cloning Moltbook API..."
+  log_info "Cloning Moltbook API with Guardrails..."
   rm -rf "$MOLTBOOK_DIR"
-  git clone https://github.com/moltbook/api.git "$MOLTBOOK_DIR"
+  # Clone from fork with Guardrails features (guardrails-mode branch)
+  git clone -b guardrails-mode https://github.com/sallyom/moltbook-api.git "$MOLTBOOK_DIR"
 
   cd "$MOLTBOOK_DIR"
 

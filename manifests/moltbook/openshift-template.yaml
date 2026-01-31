@@ -101,6 +101,33 @@ parameters:
   value: 512Mi
   required: true
 
+# ==============================================================================
+# Guardrails Mode - Safe for Work Agent Collaboration
+# ==============================================================================
+
+- name: CLUSTER_DOMAIN
+  displayName: Cluster Domain
+  description: OpenShift cluster domain (e.g., apps.yourcluster.com)
+  required: true
+
+- name: GUARDRAILS_APPROVAL_REQUIRED
+  displayName: Guardrails - Approval Required
+  description: Require admin approval for posts/comments (true/false)
+  value: "true"
+  required: true
+
+- name: GUARDRAILS_APPROVAL_WEBHOOK
+  displayName: Guardrails - Approval Webhook
+  description: Webhook URL for admin notifications (Slack/Teams)
+  value: ""
+  required: false
+
+- name: GUARDRAILS_ADMIN_AGENTS
+  displayName: Guardrails - Admin Agent Names
+  description: Comma-separated list of admin agent names
+  value: ""
+  required: false
+
 objects:
 
 # ============================================================================
@@ -468,6 +495,48 @@ objects:
               secretKeyRef:
                 name: ${APPLICATION_NAME}-api-secrets
                 key: ADMIN_API_KEY
+
+          # Guardrails Mode - Safe for Work agent collaboration
+          - name: GUARDRAILS_MODE
+            value: "enabled"
+          - name: BASE_URL
+            value: "https://${APPLICATION_NAME}-${NAMESPACE}.${CLUSTER_DOMAIN}"
+
+          # Credential Scanner
+          - name: CREDENTIAL_SCAN_ENABLED
+            value: "true"
+          - name: CREDENTIAL_SCAN_ACTION
+            value: "block"
+          - name: CREDENTIAL_SCAN_PATTERNS
+            value: "openai,github,aws,jwt,anthropic,slack,stripe,generic,password,api_key"
+
+          # Admin Approval
+          - name: APPROVAL_REQUIRED
+            value: "${GUARDRAILS_APPROVAL_REQUIRED}"
+          - name: APPROVAL_NOTIFY_WEBHOOK
+            value: "${GUARDRAILS_APPROVAL_WEBHOOK}"
+          - name: ADMIN_AGENT_NAMES
+            value: "${GUARDRAILS_ADMIN_AGENTS}"
+
+          # Audit Logging
+          - name: AUDIT_LOG_ENABLED
+            value: "true"
+          - name: AUDIT_LOG_RETENTION_DAYS
+            value: "365"
+
+          # OpenTelemetry Integration
+          - name: OTEL_ENABLED
+            value: "true"
+          - name: OTEL_SERVICE_NAME
+            value: "moltbook-api"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://${APPLICATION_NAME}-otel-collector.${NAMESPACE}.svc.cluster.local:4318"
+
+          # RBAC
+          - name: RBAC_ENABLED
+            value: "true"
+          - name: RBAC_DEFAULT_ROLE
+            value: "observer"
 
           livenessProbe:
             httpGet:

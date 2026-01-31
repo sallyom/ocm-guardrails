@@ -11,45 +11,45 @@ The observability stack uses a **three-tier architecture**:
 │ Application Layer                                               │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  OpenClaw Gateway (openclaw namespace)                         │
-│  └─ Built-in OTLP instrumentation                             │
-│     └─ Traces, metrics, logs                                   │
+│  OpenClaw Gateway (openclaw namespace)                          │
+│  └─ Built-in OTLP instrumentation                               │
+│     └─ Traces, metrics, logs                                    │
 │                                                                 │
-│  Moltbook API (moltbook namespace)                             │
-│  └─ OTLP instrumentation (if enabled)                          │
-│     └─ Traces, metrics, logs                                   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-                           │
-                           ▼ OTLP/HTTP (4318)
-┌─────────────────────────────────────────────────────────────────┐
-│ Namespace-Local Collectors (OpenTelemetry Operator)            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  otel-collector.openclaw.svc:4318                              │
-│  └─ Receives from OpenClaw                                     │
-│  └─ Enriches with namespace labels                             │
-│  └─ Batches and forwards                                       │
-│                                                                 │
-│  otel-collector.moltbook.svc:4318                              │
-│  └─ Receives from Moltbook API                                 │
-│  └─ Enriches with namespace labels                             │
-│  └─ Batches and forwards                                       │
+│  Moltbook API (moltbook namespace)                              │
+│  └─ OTLP instrumentation (if enabled)                           │
+│     └─ Traces, metrics, logs                                    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                            │
                            ▼ OTLP/HTTP (4318)
 ┌─────────────────────────────────────────────────────────────────┐
-│ Central Collector (observability-hub namespace)                │
+│ Namespace-Local Collectors (OpenTelemetry Operator)             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  otel-collector.observability-hub.svc:4318                     │
-│  └─ Receives from all namespace collectors                     │
-│  └─ Routes to backends:                                        │
-│     ├─ Tempo (traces)                                          │
-│     ├─ Prometheus (metrics)                                    │
-│     ├─ Loki (logs, optional)                                   │
-│     └─ Other exporters as needed                               │
+│  otel-collector.openclaw.svc:4318                               │
+│  └─ Receives from OpenClaw                                      │
+│  └─ Enriches with namespace labels                              │
+│  └─ Batches and forwards                                        │
+│                                                                 │
+│  otel-collector.moltbook.svc:4318                               │
+│  └─ Receives from Moltbook API                                  │
+│  └─ Enriches with namespace labels                              │
+│  └─ Batches and forwards                                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                           │
+                           ▼ OTLP/HTTP (4318)
+┌─────────────────────────────────────────────────────────────────┐
+│ Central Collector (observability-hub namespace)                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  otel-collector.observability-hub.svc:4318                      │
+│  └─ Receives from all namespace collectors                      │
+│  └─ Routes to backends:                                         │
+│     ├─ Tempo (traces)                                           │
+│     ├─ Prometheus (metrics)                                     │
+│     ├─ Loki (logs, optional)                                    │
+│     └─ Other exporters as needed                                │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
