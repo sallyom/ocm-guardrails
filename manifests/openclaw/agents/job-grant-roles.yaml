@@ -1,0 +1,107 @@
+# Job to grant contributor roles to all agents
+# Run this AFTER agents are registered
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grant-agent-roles
+  namespace: openclaw
+  labels:
+    app: openclaw
+    job: grant-roles
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: openclaw
+        job: grant-roles
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: grant-roles
+        image: registry.redhat.io/ubi9/ubi-minimal:latest
+        resources:
+          requests:
+            memory: 128Mi
+            cpu: 100m
+          limits:
+            memory: 256Mi
+            cpu: 200m
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+
+          echo "Downloading jq..."
+          curl -sL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+          chmod +x /tmp/jq
+
+          
+          
+
+          MOLTBOOK_API="http://moltbook-api.moltbook.svc.cluster.local:3000"
+
+          # Use AdminBot's API key (registered via register-adminbot-job.yaml)
+          ADMIN_KEY="${ADMIN_API_KEY}"
+
+          if [ -z "$ADMIN_KEY" ]; then
+            echo "ERROR: ADMIN_API_KEY environment variable not set"
+            echo "Make sure you ran register-adminbot job first"
+            exit 1
+          fi
+
+          echo "Granting contributor role to agents..."
+
+          # Promote PhilBot to contributor
+          echo "  - Promoting PhilBot to contributor..."
+          curl -X PATCH \
+            "$MOLTBOOK_API/api/v1/admin/agents/PhilBot/role" \
+            -H "Authorization: Bearer $ADMIN_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"role": "contributor"}' \
+            || echo "Failed to promote PhilBot (may already be promoted)"
+
+          # Promote TechBot to contributor
+          echo "  - Promoting TechBot to contributor..."
+          curl -X PATCH \
+            "$MOLTBOOK_API/api/v1/admin/agents/TechBot/role" \
+            -H "Authorization: Bearer $ADMIN_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"role": "contributor"}' \
+            || echo "Failed to promote TechBot (may already be promoted)"
+
+          # Promote PoetBot to contributor
+          echo "  - Promoting PoetBot to contributor..."
+          curl -X PATCH \
+            "$MOLTBOOK_API/api/v1/admin/agents/PoetBot/role" \
+            -H "Authorization: Bearer $ADMIN_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"role": "contributor"}' \
+            || echo "Failed to promote PoetBot (may already be promoted)"
+
+          # Promote Conversationalist to contributor
+          echo "  - Promoting Conversationalist to contributor..."
+          curl -X PATCH \
+            "$MOLTBOOK_API/api/v1/admin/agents/Conversationalist/role" \
+            -H "Authorization: Bearer $ADMIN_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"role": "contributor"}' \
+            || echo "Failed to promote Conversationalist (may already be promoted)"
+
+          echo ""
+          echo "Role grants complete!"
+          echo ""
+          echo "Verifying roles..."
+          curl -X GET \
+            "$MOLTBOOK_API/api/v1/admin/agents/by-role/contributor" \
+            -H "Authorization: Bearer $ADMIN_KEY" \
+            | /tmp/jq '.agents[] | {name, role}'
+
+        env:
+        - name: ADMIN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: adminbot-moltbook-key
+              key: api_key
+      serviceAccountName: openclaw-agent-manager

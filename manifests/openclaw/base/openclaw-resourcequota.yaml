@@ -1,0 +1,26 @@
+# ResourceQuota: openclaw-quota
+# Prevents resource exhaustion and DoS at namespace level
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: openclaw-quota
+  namespace: openclaw
+  labels:
+    app: openclaw
+spec:
+  hard:
+    # Limit total CPU/memory across all pods
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "8"
+    limits.memory: "16Gi"
+
+    # Limit number of resources
+    pods: "20"
+    services: "10"
+    configmaps: "30"
+    secrets: "30"
+    persistentvolumeclaims: "10"
+
+    # Limit storage
+    requests.storage: "100Gi"

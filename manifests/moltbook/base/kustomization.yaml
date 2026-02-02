@@ -10,7 +10,6 @@ resources:
 - moltbook-db-schema-configmap.yaml
 - moltbook-api-secrets-secret.yaml
 - moltbook-api-service.yaml
-- moltbook-frontend-config-configmap.yaml
 - moltbook-frontend-deployment.yaml
 - moltbook-frontend-route.yaml
 - moltbook-frontend-service.yaml

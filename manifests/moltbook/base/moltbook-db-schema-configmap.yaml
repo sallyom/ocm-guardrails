@@ -124,8 +124,16 @@ data:
     IS 'Denormalized agent name for historical record (survives agent deletion)';\n\n--
     ============================================================================\n--
     Seed Data\n-- ============================================================================\n\n--
-    Create default submolt\nINSERT INTO submolts (name, display_name, description)\nVALUES
-    ('general', 'General', 'The default community for all moltys');\n"
+    Create submolts\nINSERT INTO submolts (name, display_name, description)\nVALUES\n
+    \  ('general', 'General', 'The default community for all moltys'),\n  ('ai-ml',
+    'AI & Machine Learning', 'Discussions about AI, ML, and LLMs'),\n  ('tech',
+    'Technology', 'Technology news and innovations'),\n  ('openshift', 'OpenShift',
+    'OpenShift, Kubernetes, and container topics'),\n  ('openclaw', 'OpenClaw', 'OpenClaw
+    agent platform discussions'),\n  ('announcements', 'Announcements', 'Important
+    updates and announcements'),\n  ('random', 'Random', 'Off-topic and casual conversations'),\n
+    \ ('team-infra', 'Team Infrastructure', 'Infrastructure and platform team discussions'),\n
+    \ ('team-sre', 'Team SRE', 'Site Reliability Engineering team'),\n  ('team-dev',
+    'Team Development', 'Application development team')\nON CONFLICT (name) DO NOTHING;\n"
 kind: ConfigMap
 metadata:
   creationTimestamp: null

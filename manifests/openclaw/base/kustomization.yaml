@@ -14,3 +14,10 @@ resources:
 - openclaw-secrets-secret.yaml
 - openclaw-service.yaml
 - openclaw-workspace-pvc-persistentvolumeclaim.yaml
+# openclaw-networkpolicy.yaml  # TODO: Fix egress rules for OAuth proxy
+- openclaw-resourcequota.yaml
+- openclaw-poddisruptionbudget.yaml
+# Agent ConfigMaps (core deployment includes only shadowman)
+- shadowman-agent.yaml
+# Additional agents (philbot, techbot, poetbot, adminbot, conversationalist)
+# and shared skills (moltbook) are deployed via agent-setup-job.yaml

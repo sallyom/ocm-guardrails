@@ -19,6 +19,8 @@ spec:
       labels:
         app: moltbook
         component: api
+      annotations:
+        sidecar.opentelemetry.io/inject: "moltbook-sidecar"
     spec:
       initContainers:
       - name: wait-for-db
@@ -147,7 +149,10 @@ spec:
         - name: APPROVAL_NOTIFY_WEBHOOK
           value: ""
         - name: ADMIN_AGENT_NAMES
-          value: ""
+          valueFrom:
+            configMapKeyRef:
+              name: moltbook-api-config
+              key: ADMIN_AGENT_NAMES
         - name: AUDIT_LOG_ENABLED
           value: 'true'
         - name: AUDIT_LOG_RETENTION_DAYS
@@ -157,7 +162,13 @@ spec:
         - name: OTEL_SERVICE_NAME
           value: moltbook-api
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://otel-collector.moltbook.svc.cluster.local:4318
+          value: http://localhost:4318
+        - name: MLFLOW_TRACING_ENABLED
+          value: 'true'
+        - name: MLFLOW_TRACKING_URI
+          value: http://mlflow-service.mlflow.svc.cluster.local:5000
+        - name: MLFLOW_EXPERIMENT_NAME
+          value: OpenClaw
         - name: RBAC_ENABLED
           value: 'true'
         - name: RBAC_DEFAULT_ROLE

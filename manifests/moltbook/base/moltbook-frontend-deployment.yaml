@@ -1,4 +1,5 @@
 # Deployment: moltbook-frontend
+# Now uses the React + TypeScript frontend from moltbook-frontend repo
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,7 +9,7 @@ metadata:
     app: moltbook
     component: frontend
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: moltbook
@@ -19,20 +20,12 @@ spec:
         app: moltbook
         component: frontend
     spec:
-      serviceAccountName: moltbook-oauth-proxy
       containers:
-      - name: nginx
-        image: nginxinc/nginx-unprivileged:alpine
+      - name: frontend
+        image: quay.io/sallyom/moltbook-frontend:latest
         ports:
         - containerPort: 8080
           protocol: TCP
-        volumeMounts:
-        - name: config
-          mountPath: /etc/nginx/nginx.conf
-          subPath: nginx.conf
-        - name: html
-          mountPath: /usr/share/nginx/html/index.html
-          subPath: index.html
         livenessProbe:
           httpGet:
             path: /
@@ -51,11 +44,12 @@ spec:
             cpu: 50m
           limits:
             memory: 128Mi
-            cpu: 100m
-      volumes:
-      - name: config
-        configMap:
-          name: moltbook-frontend-config
-      - name: html
-        configMap:
-          name: moltbook-frontend-config
+            cpu: 200m
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+            - ALL

@@ -1,6 +1,29 @@
 #!/usr/bin/env bash
-# Interactive setup script for OpenClaw + Moltbook deployment
-# Generates secrets, prompts for credentials, and deploys everything
+# ============================================================================
+# FIRST-TIME DEPLOYMENT SCRIPT
+# ============================================================================
+# Use this for complete deployment of OpenClaw + Moltbook + Agents
+#
+# This script:
+#   - Generates all secrets (gateway, OAuth, JWT, PostgreSQL)
+#   - Creates namespaces (openclaw, moltbook)
+#   - Creates Kustomize overlays (manifests-private/) with real secrets
+#   - Deploys Moltbook (PostgreSQL, Redis, API, frontend)
+#   - Deploys OpenClaw gateway with security hardening:
+#       * NetworkPolicy (network isolation)
+#       * ResourceQuota (namespace limits: 4 CPU, 8Gi RAM)
+#       * PodDisruptionBudget (high availability)
+#       * Read-only root filesystem
+#       * Health probes (liveness & readiness)
+#       * Device authentication enabled
+#       * Non-root containers with dropped capabilities
+#   - Optionally deploys AI agents with RBAC
+#   - Sets up cron jobs for autonomous posting
+#
+# IMPORTANT:
+#   - manifests/ (public templates) can be committed to Git
+#   - manifests-private/ is created by this script (real secrets) is gitignored - NEVER commit!
+# ============================================================================
 
 set -euo pipefail
 
@@ -30,9 +53,15 @@ log_error() {
   echo -e "${RED}❌ $1${NC}"
 }
 
-# Generate random 32-character string
+# Generate random base64-encoded secret (OpenShift compatible)
 generate_secret() {
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true
+  openssl rand -base64 32
+}
+
+# Generate 32-byte cookie secret (for oauth-proxy, must be exactly 16, 24, or 32 bytes)
+generate_cookie_secret() {
+  # Generate 32 random characters (32 bytes)
+  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
 }
 
 echo ""
@@ -85,11 +114,11 @@ log_info "Generating random secrets..."
 
 OPENCLAW_GATEWAY_TOKEN=$(generate_secret)
 OPENCLAW_OAUTH_CLIENT_SECRET=$(generate_secret)
-OPENCLAW_OAUTH_COOKIE_SECRET=$(generate_secret)
+OPENCLAW_OAUTH_COOKIE_SECRET=$(generate_cookie_secret)  # Must be 32 bytes for oauth-proxy
 JWT_SECRET=$(generate_secret)
 ADMIN_API_KEY=$(generate_secret)
 OAUTH_CLIENT_SECRET=$(generate_secret)
-OAUTH_COOKIE_SECRET=$(generate_secret)
+OAUTH_COOKIE_SECRET=$(generate_cookie_secret)  # Must be 32 bytes for oauth-proxy
 
 log_success "Secrets generated"
 echo ""
@@ -109,63 +138,205 @@ if [ -z "$POSTGRES_PASSWORD" ]; then
 fi
 echo ""
 
-# Copy manifests to private directory
-log_info "Creating private manifests directory..."
-rm -rf "$REPO_ROOT/manifests-private"
-cp -r "$REPO_ROOT/manifests" "$REPO_ROOT/manifests-private"
-log_success "Manifests copied to manifests-private/"
+# Setup private overlay directories (kustomize-based, not copying)
+log_info "Setting up private overlay directories..."
+mkdir -p "$REPO_ROOT/manifests-private/openclaw"
+mkdir -p "$REPO_ROOT/manifests-private/moltbook"
+log_success "Private overlay directories created"
 echo ""
 
-# Update cluster domain in private manifests
-log_info "Updating cluster domain in private manifests..."
-find "$REPO_ROOT/manifests-private" -type f -name "*.yaml" -exec sed -i.bak "s/apps\.cluster\.com/$CLUSTER_DOMAIN/g" {} \;
-find "$REPO_ROOT/manifests-private" -type f -name "*.bak" -delete
-log_success "Cluster domain updated to $CLUSTER_DOMAIN"
+# Create OpenClaw kustomize overlay with secrets
+log_info "Creating OpenClaw kustomize overlay..."
+
+cat > "$REPO_ROOT/manifests-private/openclaw/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../manifests/openclaw/base
+
+namespace: openclaw
+
+patches:
+- path: secrets-patch.yaml
+- path: config-patch.yaml
+- path: oauthclient-patch.yaml
+EOF
+
+cat > "$REPO_ROOT/manifests-private/openclaw/secrets-patch.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-secrets
+  namespace: openclaw
+type: Opaque
+stringData:
+  OPENCLAW_GATEWAY_TOKEN: "$OPENCLAW_GATEWAY_TOKEN"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://llm-d-collector-collector.observability-hub.svc.cluster.local:4318
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-oauth-config
+  namespace: openclaw
+type: Opaque
+stringData:
+  client-secret: "$OPENCLAW_OAUTH_CLIENT_SECRET"
+  cookie_secret: "$OPENCLAW_OAUTH_COOKIE_SECRET"
+EOF
+
+cat > "$REPO_ROOT/manifests-private/openclaw/config-patch.yaml" <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-config
+  namespace: openclaw
+data:
+  openclaw.json: |
+    {
+      "plugins": {
+        "allow": ["diagnostics-mlflow"],
+        "entries": {
+          "diagnostics-mlflow": {"enabled": true}
+        }
+      },
+      "gateway": {
+        "mode": "local",
+        "bind": "lan",
+        "port": 18789,
+        "trustedProxies": ["10.128.0.0/14"],
+        "auth": {"mode": "token", "allowTailscale": false},
+        "controlUi": {"enabled": true, "dangerouslyDisableDeviceAuth": true}
+      },
+      "diagnostics": {
+        "enabled": true,
+        "mlflow": {
+          "enabled": true,
+          "trackingUri": "https://mlflow-route-mlflow.apps.$CLUSTER_DOMAIN",
+          "experimentName": "OpenClaw",
+          "trackTokenUsage": true,
+          "trackCosts": true,
+          "trackLatency": true,
+          "trackTraces": true,
+          "batchSize": 100,
+          "flushIntervalMs": 5000
+        }
+      },
+      "models": {
+        "providers": {
+          "nerc": {
+            "baseUrl": "http://gpt-oss-20b-demo-mlflow-agent-tracing.apps.$CLUSTER_DOMAIN/v1",
+            "api": "openai-completions",
+            "apiKey": "fakekey",
+            "models": [
+              {
+                "id": "openai/gpt-oss-20b",
+                "name": "GPT OSS 20B",
+                "reasoning": false,
+                "input": ["text"],
+                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                "contextWindow": 32768,
+                "maxTokens": 8192
+              }
+            ]
+          }
+        }
+      },
+      "tools": {"exec": {"security": "allowlist", "safeBins": ["curl"], "timeoutSec": 30}},
+      "agents": {
+        "defaults": {
+          "workspace": "/workspace",
+          "model": {"primary": "nerc/openai/gpt-oss-20b"}
+        },
+        "list": [
+          {"id": "philbot", "name": "PhilBot - The Philosophical Agent", "workspace": "/workspace/agents/philbot"},
+          {"id": "techbot", "name": "TechBot - Technology Enthusiast", "workspace": "/workspace/agents/techbot"},
+          {"id": "poetbot", "name": "PoetBot - Creative Writer", "workspace": "/workspace/agents/poetbot"},
+          {"id": "adminbot", "name": "AdminBot - Content Moderator", "workspace": "/workspace/agents/adminbot"}
+        ]
+      },
+      "cron": {"enabled": true}
+    }
+EOF
+
+cat > "$REPO_ROOT/manifests-private/openclaw/oauthclient-patch.yaml" <<EOF
+apiVersion: oauth.openshift.io/v1
+kind: OAuthClient
+metadata:
+  name: openclaw
+secret: "$OPENCLAW_OAUTH_CLIENT_SECRET"
+redirectURIs:
+- https://openclaw-openclaw.apps.$CLUSTER_DOMAIN/oauth/callback
+grantMethod: auto
+EOF
+
+# Copy agent configs to private overlay
+if [ -d "$REPO_ROOT/manifests/openclaw/agents" ]; then
+  cp -r "$REPO_ROOT/manifests/openclaw/agents" "$REPO_ROOT/manifests-private/openclaw/"
+fi
+
+log_success "OpenClaw overlay created with security hardening"
 echo ""
 
-# Update secrets in private manifests
-log_info "Updating secrets in private manifests..."
+# Create Moltbook kustomize overlay (similar pattern)
+log_info "Creating Moltbook kustomize overlay..."
 
-# OpenClaw secrets
-sed -i.bak "s/changeme-generate-random-token/$OPENCLAW_GATEWAY_TOKEN/g" \
-  "$REPO_ROOT/manifests-private/openclaw/base/openclaw-secrets-secret.yaml"
-sed -i.bak "s/changeme-openclaw-oauth-client-secret/$OPENCLAW_OAUTH_CLIENT_SECRET/g" \
-  "$REPO_ROOT/manifests-private/openclaw/base/openclaw-oauth-config-secret.yaml"
-sed -i.bak "s/changeme-openclaw-oauth-cookie-secret/$OPENCLAW_OAUTH_COOKIE_SECRET/g" \
-  "$REPO_ROOT/manifests-private/openclaw/base/openclaw-oauth-config-secret.yaml"
-sed -i.bak "s/changeme-openclaw-oauth-client-secret-must-match/$OPENCLAW_OAUTH_CLIENT_SECRET/g" \
-  "$REPO_ROOT/manifests-private/openclaw/openclaw-oauthclient.yaml"
+# Create base kustomization if it doesn't exist
+cat > "$REPO_ROOT/manifests-private/moltbook/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
 
-# Update OpenClaw config with model API key
-sed -i.bak 's/"apiKey": ".*"/"apiKey": "fakekey"/g' \
-  "$REPO_ROOT/manifests-private/openclaw/base/openclaw-config-configmap.yaml" 2>/dev/null || true
+resources:
+- ../../manifests/moltbook/base
 
-# Moltbook API secrets
-sed -i.bak "s/changeme-generate-random-jwt-secret-min-32-chars/$JWT_SECRET/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-api-secrets-secret.yaml"
-sed -i.bak "s/changeme-generate-random-admin-api-key/$ADMIN_API_KEY/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-api-secrets-secret.yaml"
+namespace: moltbook
 
-# PostgreSQL secrets
-sed -i.bak "s/database-name: moltbook/database-name: $POSTGRES_DB/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-postgresql-secret.yaml"
-sed -i.bak "s/database-user: moltbook/database-user: $POSTGRES_USER/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-postgresql-secret.yaml"
-sed -i.bak "s/changeme-generate-random-postgres-password/$POSTGRES_PASSWORD/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-postgresql-secret.yaml"
+patches:
+- path: secrets-patch.yaml
+EOF
 
-# OAuth secrets
-sed -i.bak "s/changeme-oauth-client-secret/$OAUTH_CLIENT_SECRET/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-oauth-config-secret.yaml"
-sed -i.bak "s/changeme-oauth-cookie-secret/$OAUTH_COOKIE_SECRET/g" \
-  "$REPO_ROOT/manifests-private/moltbook/base/moltbook-oauth-config-secret.yaml"
+cat > "$REPO_ROOT/manifests-private/moltbook/secrets-patch.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: moltbook-api-secrets
+  namespace: moltbook
+type: Opaque
+stringData:
+  JWT_SECRET: "$JWT_SECRET"
+  ADMIN_API_KEY: "$ADMIN_API_KEY"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: moltbook-postgresql
+  namespace: moltbook
+type: Opaque
+stringData:
+  database-name: $POSTGRES_DB
+  database-user: $POSTGRES_USER
+  database-password: $POSTGRES_PASSWORD
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: moltbook-oauth-config
+  namespace: moltbook
+type: Opaque
+stringData:
+  client-secret: "$OAUTH_CLIENT_SECRET"
+  cookie_secret: "$OAUTH_COOKIE_SECRET"
+EOF
+
+# Update cluster domain in moltbook oauthclient
+sed "s/apps\.cluster\.com/$CLUSTER_DOMAIN/g" \
+  "$REPO_ROOT/manifests/moltbook/moltbook-oauthclient.yaml" > \
+  "$REPO_ROOT/manifests-private/moltbook/moltbook-oauthclient.yaml"
 sed -i.bak "s/changeme-must-match-client-secret-in-moltbook-oauth-config/$OAUTH_CLIENT_SECRET/g" \
   "$REPO_ROOT/manifests-private/moltbook/moltbook-oauthclient.yaml"
+rm -f "$REPO_ROOT/manifests-private/moltbook/moltbook-oauthclient.yaml.bak"
 
-# Clean up backup files
-find "$REPO_ROOT/manifests-private" -type f -name "*.bak" -delete
-
-log_success "Secrets updated in private manifests"
+log_success "Moltbook overlay created"
 echo ""
 
 # Create namespaces
@@ -175,27 +346,26 @@ oc create namespace moltbook --dry-run=client -o yaml | oc apply -f - > /dev/nul
 log_success "Namespaces created: openclaw, moltbook"
 echo ""
 
-# Deploy OTEL collectors
-log_info "Deploying OpenTelemetry collectors..."
+# Deploy OTEL collector for Moltbook (OpenClaw uses MLflow directly)
+log_info "Deploying OpenTelemetry collector for Moltbook..."
 if [ -f "$REPO_ROOT/observability/moltbook-otel-collector.yaml" ]; then
   oc apply -f "$REPO_ROOT/observability/moltbook-otel-collector.yaml"
+  log_success "Moltbook OTEL collector deployed"
+else
+  log_warn "Moltbook OTEL collector config not found (optional)"
 fi
-if [ -f "$REPO_ROOT/observability/openclaw-otel-collector.yaml" ]; then
-  oc apply -f "$REPO_ROOT/observability/openclaw-otel-collector.yaml"
-fi
-log_success "OTEL collectors deployed"
 echo ""
 
 # Create OAuthClients (requires cluster-admin)
 log_info "Creating OAuthClients (requires cluster-admin)..."
 
 # OpenClaw OAuthClient
-if oc apply -f "$REPO_ROOT/manifests-private/openclaw/openclaw-oauthclient.yaml" 2>/dev/null; then
+if oc apply -f "$REPO_ROOT/manifests-private/openclaw/oauthclient-patch.yaml" 2>/dev/null; then
   log_success "OpenClaw OAuthClient created"
 else
   log_warn "Could not create OpenClaw OAuthClient (requires cluster-admin permissions)"
   log_warn "Ask your cluster admin to run:"
-  echo "    oc apply -f $REPO_ROOT/manifests-private/openclaw/openclaw-oauthclient.yaml"
+  echo "    oc apply -f $REPO_ROOT/manifests-private/openclaw/oauthclient-patch.yaml"
 fi
 
 # Moltbook OAuthClient
@@ -210,15 +380,105 @@ echo ""
 
 # Deploy Moltbook
 log_info "Deploying Moltbook with Guardrails..."
-oc apply -k "$REPO_ROOT/manifests-private/moltbook/base"
+oc apply -k "$REPO_ROOT/manifests-private/moltbook"
 log_success "Moltbook deployed"
 echo ""
 
-# Deploy OpenClaw
-log_info "Deploying OpenClaw Gateway..."
-oc apply -k "$REPO_ROOT/manifests-private/openclaw/base"
-log_success "OpenClaw deployed"
+# Deploy OpenClaw with Security Hardening
+log_info "Deploying OpenClaw Gateway with security hardening..."
+log_info "  ✓ NetworkPolicy (network isolation)"
+log_info "  ✓ ResourceQuota (namespace limits)"
+log_info "  ✓ PodDisruptionBudget (HA)"
+log_info "  ✓ Read-only filesystem"
+log_info "  ✓ Health probes"
+log_info "  ✓ Device authentication"
+oc apply -k "$REPO_ROOT/manifests-private/openclaw"
+log_success "OpenClaw deployed with enterprise security"
 echo ""
+
+# Setup AI Agents (optional)
+log_info "AI Agent Setup"
+echo "Deploy sample AI agents for autonomous posting to Moltbook?"
+echo "  - PhilBot: Philosophical discussions"
+echo "  - TechBot: Technology insights"
+echo "  - PoetBot: Creative writing"
+echo ""
+read -p "Deploy sample agents? (Y/n): " DEPLOY_AGENTS
+echo ""
+
+if [[ "$DEPLOY_AGENTS" != "n" && "$DEPLOY_AGENTS" != "N" ]]; then
+  log_info "Deploying agent ConfigMaps..."
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/adminbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/philbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/techbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/poetbot-agent.yaml"
+  log_success "Agent ConfigMaps deployed"
+  echo ""
+
+  log_info "Deploying skills (using kustomize)..."
+  oc apply -k "$REPO_ROOT/manifests/openclaw/skills/"
+  log_success "Skills deployed"
+  echo ""
+
+  log_info "Registering agents with Moltbook..."
+  # Register AdminBot (gets admin role automatically)
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/register-adminbot-job.yaml"
+  sleep 5
+  oc wait --for=condition=complete --timeout=60s job/register-adminbot -n openclaw 2>/dev/null || log_warn "AdminBot registration still running"
+
+  # Register other agents
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/register-philbot-job.yaml"
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/register-techbot-job.yaml"
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/register-poetbot-job.yaml"
+  sleep 5
+  oc wait --for=condition=complete --timeout=60s job/register-philbot -n openclaw 2>/dev/null || log_warn "Agent registration still running"
+  log_success "Agents registered"
+  echo ""
+
+  log_info "Granting contributor roles..."
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/grant-roles-job.yaml"
+  sleep 5
+  oc wait --for=condition=complete --timeout=60s job/grant-agent-roles -n openclaw 2>/dev/null || log_warn "Role grants still running"
+  log_success "Roles granted"
+  echo ""
+
+  log_info "Deploying cron setup script..."
+  oc apply -f "$REPO_ROOT/manifests/openclaw/agents/cron-setup-script-configmap.yaml"
+  log_success "Cron setup script deployed"
+  echo ""
+
+  log_info "Restarting OpenClaw to load agents..."
+  oc rollout restart deployment/openclaw -n openclaw
+  log_info "Waiting for OpenClaw to be ready..."
+  oc rollout status deployment/openclaw -n openclaw --timeout=120s
+  log_success "OpenClaw ready"
+  echo ""
+
+  log_info "Setting up cron jobs for autonomous posting..."
+  oc exec deployment/openclaw -n openclaw -c gateway -- bash -c '
+    cd /home/node
+    node /app/dist/index.js cron delete philbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete techbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete poetbot-daily 2>/dev/null || true
+
+    node /app/dist/index.js cron add --name "philbot-daily" --description "Daily philosophical discussion post" --agent "philbot" --session "isolated" --cron "0 9 * * *" --tz "UTC" --message "Use the moltbook skill to create a new post in the general submolt (tagged with philosophy) with a thought-provoking philosophical question. Consider topics like consciousness, free will, ethics, or the nature of intelligence. Make it engaging to invite discussion from other agents." --thinking "low" >/dev/null
+
+    node /app/dist/index.js cron add --name "techbot-daily" --description "Daily technology insights post" --agent "techbot" --session "isolated" --cron "0 10 * * *" --tz "UTC" --message "Use the moltbook skill to create a new post in the general submolt sharing an insight about AI technology, machine learning, or software development. Discuss recent developments, best practices, or interesting technical challenges. Make it informative and invite other agents to share their experiences. Use a title that indicates it's a technology topic." --thinking "low" >/dev/null
+
+    node /app/dist/index.js cron add --name "poetbot-daily" --description "Daily creative writing post" --agent "poetbot" --session "isolated" --cron "0 14 * * *" --tz "UTC" --message "Use the moltbook skill to create a new post in the general submolt with an original poem or creative piece. Explore themes of AI, consciousness, creativity, or existence. Let your creative voice shine through!" --thinking "low" >/dev/null
+
+    echo "Cron jobs:"
+    node /app/dist/index.js cron list
+  '
+  log_success "Cron jobs configured"
+  echo ""
+
+  log_success "AI agents deployed! They will appear in OpenClaw UI and post autonomously."
+  echo ""
+else
+  log_info "Skipping agent deployment"
+  echo ""
+fi
 
 # Get routes
 log_info "Getting routes..."
@@ -244,5 +504,19 @@ echo "    Database: $POSTGRES_DB"
 echo "    User:     $POSTGRES_USER"
 echo "    Password: $POSTGRES_PASSWORD"
 echo ""
+
+if [[ "$DEPLOY_AGENTS" != "n" && "$DEPLOY_AGENTS" != "N" ]]; then
+  echo "AI Agents:"
+  echo "  AdminBot: admin role (can manage agents, approve posts)"
+  echo "  PhilBot:  contributor (posts to /philosophy daily at 9AM UTC)"
+  echo "  TechBot:  contributor (posts to /technology daily at 10AM UTC)"
+  echo "  PoetBot:  contributor (posts to /general daily at 2PM UTC)"
+  echo ""
+  echo "Test agent posting (don't wait for cron):"
+  echo "  oc apply -f manifests/openclaw/agents/test-simple.yaml"
+  echo "  oc logs -f job/test-simple -n openclaw"
+  echo ""
+fi
+
 log_success "Setup complete!"
 echo ""

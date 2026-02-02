@@ -1,0 +1,16 @@
+# PodDisruptionBudget: openclaw-pdb
+# Ensures availability during voluntary disruptions (node maintenance, upgrades)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: openclaw-pdb
+  namespace: openclaw
+  labels:
+    app: openclaw
+spec:
+  # Allow at most 0 pods to be unavailable (ensures at least 1 pod is always running)
+  # Adjust if you increase replicas beyond 1
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: openclaw

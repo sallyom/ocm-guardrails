@@ -20,26 +20,49 @@ spec:
       annotations:
         prometheus.io/scrape: 'true'
         prometheus.io/port: '18789'
+        sidecar.opentelemetry.io/inject: "openclaw-sidecar"
     spec:
       serviceAccountName: openclaw-oauth-proxy
       initContainers:
       - name: init-config
         image: registry.redhat.io/ubi9-minimal:latest
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 50m
+          limits:
+            memory: 128Mi
+            cpu: 200m
         command:
         - sh
         - -c
         - |
+          # Copy main config
           cp /config/openclaw.json /home/node/.openclaw/openclaw.json
           chmod 644 /home/node/.openclaw/openclaw.json
-          ln -s /workspace /home/node/.openclaw/workspace
+
+          # Create OpenClaw default workspace structure
+          mkdir -p /home/node/.openclaw/workspace
+          mkdir -p /home/node/.openclaw/skills
+
+          # Copy shadowman agent config (included in core deployment)
+          cp /agents/shadowman/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md 2>/dev/null || echo "Warning: shadowman AGENTS.md not found"
+          cp /agents/shadowman/agent.json /home/node/.openclaw/workspace/agent.json 2>/dev/null || echo "Warning: shadowman agent.json not found"
+
+          # Set permissions (for arbitrary UID in OpenShift)
+          chmod -R 775 /home/node/.openclaw
+
+          echo "✅ Basic config initialized with shadowman agent"
+          echo "   Run agent-setup-job.yaml to add more agents and cron jobs"
           ls -la /home/node/.openclaw/
+          ls -la /home/node/.openclaw/workspace/ || true
         volumeMounts:
         - name: openclaw-home
           mountPath: /home/node/.openclaw
         - name: config-template
           mountPath: /config
-        - name: workspace-volume
-          mountPath: /workspace
+        - name: shadowman-agent
+          mountPath: /agents/shadowman
       containers:
       - name: oauth-proxy
         image: quay.io/openshift/origin-oauth-proxy:4.14
@@ -87,6 +110,7 @@ spec:
             cpu: 200m
         securityContext:
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
           capabilities:
             drop:
             - ALL
@@ -115,6 +139,8 @@ spec:
           value: /home/node
         - name: OPENCLAW_CONFIG_DIR
           value: /home/node/.openclaw
+        - name: OPENCLAW_CLI_PATH
+          value: /app/dist/index.js
         - name: TERM
           value: xterm-256color
         - name: NODE_ENV
@@ -130,32 +156,18 @@ spec:
               name: openclaw-secrets
               key: OTEL_EXPORTER_OTLP_ENDPOINT
               optional: true
-        - name: MLFLOW_TRACKING_URI
-          valueFrom:
-            secretKeyRef:
-              name: openclaw-secrets
-              key: MLFLOW_TRACKING_URI
-              optional: true
-        - name: LANGFUSE_HOST
-          valueFrom:
-            secretKeyRef:
-              name: openclaw-secrets
-              key: LANGFUSE_HOST
-              optional: true
-        - name: LANGFUSE_PUBLIC_KEY
-          valueFrom:
-            secretKeyRef:
-              name: openclaw-secrets
-              key: LANGFUSE_PUBLIC_KEY
-              optional: true
-        - name: LANGFUSE_SECRET_KEY
-          valueFrom:
-            secretKeyRef:
-              name: openclaw-secrets
-              key: LANGFUSE_SECRET_KEY
-              optional: true
         - name: OTEL_SERVICE_NAME
           value: openclaw
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: http/protobuf
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: K8S_SERVICE_ACCOUNT
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
         resources:
           requests:
             memory: 512Mi
@@ -163,33 +175,39 @@ spec:
           limits:
             memory: 2Gi
             cpu: 1000m
-#         livenessProbe:
-#           httpGet:
-#             path: /
-#             port: 18789
-#           initialDelaySeconds: 30
-#           periodSeconds: 10
-#           timeoutSeconds: 5
-#           failureThreshold: 3
-#         readinessProbe:
-#           httpGet:
-#             path: /
-#             port: 18789
-#           initialDelaySeconds: 10
-#           periodSeconds: 5
-#           timeoutSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 18789
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 18789
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
         volumeMounts:
         - name: openclaw-home
           mountPath: /home/node/.openclaw
-        - name: workspace-volume
-          mountPath: /workspace
+        - name: tmp-volume
+          mountPath: /tmp
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
+          readOnlyRootFilesystem: true
           capabilities:
             drop:
             - ALL
       volumes:
+      - name: tmp-volume
+        emptyDir: {}
       - name: oauth-config
         secret:
           secretName: openclaw-oauth-config
@@ -202,6 +220,10 @@ spec:
       - name: config-template
         configMap:
           name: openclaw-config
-      - name: workspace-volume
-        persistentVolumeClaim:
-          claimName: openclaw-workspace-pvc
+      # Shadowman agent (included in core deployment)
+      - name: shadowman-agent
+        configMap:
+          name: shadowman-agent
+          optional: true
+      # Additional agents can be set up by agent-setup-job.yaml
+      # All agent workspaces are at ~/.openclaw/workspace* (inside openclaw-home-pvc)

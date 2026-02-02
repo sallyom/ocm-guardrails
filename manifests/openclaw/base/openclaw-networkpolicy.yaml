@@ -1,0 +1,113 @@
+# NetworkPolicy: openclaw
+# Restricts network traffic to/from OpenClaw pods for security hardening
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-netpol
+  namespace: openclaw
+  labels:
+    app: openclaw
+spec:
+  podSelector:
+    matchLabels:
+      app: openclaw
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  # Allow traffic from OAuth proxy (same pod - localhost)
+  - from:
+    - podSelector:
+        matchLabels:
+          app: openclaw
+    ports:
+    - protocol: TCP
+      port: 18789
+    - protocol: TCP
+      port: 18790
+
+  # Allow health checks from OpenShift (kubelet)
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 18789
+    - protocol: TCP
+      port: 8443
+
+  egress:
+  # Allow DNS resolution (UDP and TCP)
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # Allow access to Kubernetes API server (required for OAuth proxy token validation)
+  # API server is accessible via kubernetes.default.svc (ClusterIP 172.30.0.1)
+  # Using CIDR to match the service network
+  - to:
+    - podSelector: {}
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: default
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Also allow egress to Kubernetes service CIDR for API server
+  - ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+
+  # Allow access to in-cluster model service
+  # Adjust namespace label as needed for your cluster
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+
+  # Allow access to MLflow tracking server
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: mlflow
+    ports:
+    - protocol: TCP
+      port: 5000
+
+  # Allow access to OTEL collector (localhost sidecar)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: openclaw
+    ports:
+    - protocol: TCP
+      port: 4318
+
+  # Allow access to observability-hub OTEL collector
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: observability-hub
+    ports:
+    - protocol: TCP
+      port: 4317
+    - protocol: TCP
+      port: 4318
+
+  # Allow HTTPS egress for external traffic
+  # Required for:
+  # - OAuth proxy to reach oauth-openshift.apps.<cluster-domain> (token redemption)
+  # - Any external API calls
+  - ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80

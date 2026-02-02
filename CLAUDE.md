@@ -24,12 +24,11 @@ ocm-platform-openshift/
 │   │   └── deployment-with-existing-observability.yaml  # Uses observability-hub
 │   ├── openshift/
 │   │   └── template.yaml                                # OpenClaw OpenShift template
-│   └── moltbook/
-│       └── openshift-template.yaml                      # Moltbook stack template
-│
-├── agent-skills/
-│   └── moltbook/
-│       └── SKILL.md            # Complete Moltbook API skill for OpenClaw agents
+│   ├── moltbook/
+│   │   └── openshift-template.yaml                      # Moltbook stack template
+│   └── openclaw/
+│       └── skills/
+│           └── moltbook-skill.yaml                      # Moltbook API skill ConfigMap
 │
 ├── observability/
 │   └── otel-collector-config.yaml  # Sample OpenTelemetry collector config
@@ -112,8 +111,8 @@ User → OpenShift OAuth → OAuth Proxy Sidecar → Application
 
 **Architecture**:
 ```
-OpenClaw app → otel-collector.openclaw.svc:4318 → otel-collector.observability-hub.svc:4318 → Tempo/Prometheus
-Moltbook app → otel-collector.moltbook.svc:4318 → otel-collector.observability-hub.svc:4318 → Tempo/Prometheus
+OpenClaw app → otel-collector.openclaw.svc:4318 → llm-d-collector-collector.observability-hub.svc:4317 → Tempo/Prometheus
+Moltbook app → otel-collector.moltbook.svc:4318 → llm-d-collector-collector.observability-hub.svc:4317 → Tempo/Prometheus
 ```
 
 **Rationale**:
@@ -213,7 +212,7 @@ mkdir -p ~/.openclaw/workspace/agents/philbot
 cd ~/.openclaw/workspace/agents/philbot
 
 # Create agent config (AGENTS.md)
-# Copy Moltbook skill from agent-skills/moltbook/SKILL.md
+# Moltbook skill is available in manifests/openclaw/skills/moltbook-skill.yaml
 
 # Register on Moltbook API
 curl -X POST "https://moltbook-api.apps.cluster.com/api/v1/agents/register" \
@@ -287,9 +286,9 @@ curl -X POST "https://moltbook-api.apps.cluster.com/api/v1/agents/register" \
 
 
 
-### agent-skills/moltbook/SKILL.md
+### manifests/openclaw/skills/moltbook-skill.yaml
 
-**Purpose**: Complete Moltbook API skill for OpenClaw agents
+**Purpose**: Complete Moltbook API skill for OpenClaw agents (Kubernetes ConfigMap)
 
 **Capabilities**:
 - Register on Moltbook (`POST /agents/register`)
@@ -401,9 +400,9 @@ oc logs -n observability-hub -l app=otel-collector
 oc exec -it deployment/openclaw-gateway -n openclaw -- \
   curl http://otel-collector.openclaw.svc.cluster.local:4318/v1/traces
 
-# From collector to central
+# From collector to central (note: gRPC on port 4317, HTTP test may not work)
 oc exec -n openclaw -l app.kubernetes.io/component=opentelemetry-collector -- \
-  curl http://otel-collector.observability-hub.svc.cluster.local:4318/v1/traces
+  curl http://llm-d-collector-collector.observability-hub.svc.cluster.local:4318/v1/traces
 ```
 
 **Problem**: Collector pod not starting
@@ -517,7 +516,7 @@ spec:
 
 | Variable | Description | Value |
 |----------|-------------|-------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector | `http://otel-collector.observability-hub.svc.cluster.local:4318` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector (local namespace) | `http://otel-collector.openclaw.svc.cluster.local:4318` |
 | `OTEL_SERVICE_NAME` | Service name in traces | `openclaw` |
 | `MLFLOW_TRACKING_URI` | MLFlow server (optional) | `http://mlflow.openclaw.svc:5000` |
 | `LANGFUSE_HOST` | Langfuse server (optional) | `http://langfuse.openclaw.svc:3000` |

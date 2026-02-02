@@ -1,0 +1,122 @@
+---
+# OpenTelemetryCollector for openclaw namespace (sidecar mode)
+#
+# This OTEL collector is auto-injected as a sidecar container into pods that have
+# the following annotation in their Pod template metadata:
+#
+#   annotations:
+#     sidecar.opentelemetry.io/inject: "openclaw-sidecar"
+#
+# Example deployment snippet:
+#   spec:
+#     template:
+#       metadata:
+#         annotations:
+#           sidecar.opentelemetry.io/inject: "openclaw-sidecar"
+#       spec:
+#         containers:
+#         - name: gateway
+#           ...
+#
+# The sidecar listens on localhost:4317 (gRPC) and localhost:4318 (HTTP) for OTLP traces.
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpenTelemetryCollector
+metadata:
+  name: openclaw-sidecar
+  namespace: openclaw
+spec:
+  mode: sidecar
+
+  config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 127.0.0.1:4317
+          http:
+            endpoint: 127.0.0.1:4318
+
+    processors:
+      # Batch processor for better performance
+      batch:
+        timeout: 5s
+        send_batch_size: 100
+
+      # Memory limiter to prevent OOM
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 256
+        spike_limit_mib: 64
+
+      # Resource processor to add namespace info
+      resource:
+        attributes:
+          - key: service.namespace
+            value: openclaw
+            action: upsert
+          - key: k8s.namespace.name
+            value: openclaw
+            action: upsert
+          - key: deployment.environment
+            value: production
+            action: upsert
+
+      # Attributes processor to add MLflow-specific trace metadata
+      # DISABLED: This processor can modify span attributes, but MLflow only reads
+      # trace-level metadata from ROOT SPAN attributes during initial ingestion.
+      # The collector cannot modify how MLflow extracts trace-level tags.
+      # Kept here as an example of how it WOULD work if MLflow populated columns
+      # from span-level attributes added by the collector.
+      #
+      # attributes/mlflow:
+      #   actions:
+      #     # Copy session.id to mlflow.trace.session
+      #     - key: mlflow.trace.session
+      #       from_attribute: session.id
+      #       action: upsert
+      #
+      #     # Copy enduser.id to mlflow.trace.user
+      #     - key: mlflow.trace.user
+      #       from_attribute: enduser.id
+      #       action: upsert
+      #
+      #     # Copy gen_ai.prompt to mlflow.traceInputs if present
+      #     - key: mlflow.traceInputs
+      #       from_attribute: gen_ai.prompt
+      #       action: upsert
+      #
+      #     # Copy gen_ai.completion to mlflow.traceOutputs if present
+      #     - key: mlflow.traceOutputs
+      #       from_attribute: gen_ai.completion
+      #       action: upsert
+
+    exporters:
+      # Export to MLflow OTLP endpoint (path /v1/traces is auto-appended)
+      otlphttp:
+        # UPDATE TO MATCH YOUR MLFLOW ENDPOINT - Do not append /v1/traces
+        endpoint: https://mlflow-route-apps.cluser.com
+        headers:
+          x-mlflow-experiment-id: "4"
+          x-mlflow-workspace: "openclaw"
+        tls:
+          insecure: false
+
+      # Debug exporter for troubleshooting
+      debug:
+        verbosity: detailed
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          # attributes/mlflow removed - doesn't work for MLflow column population
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlphttp, debug]
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m
