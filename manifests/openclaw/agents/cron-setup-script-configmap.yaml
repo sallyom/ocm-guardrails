@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cron-setup-script
+  namespace: openclaw
+  labels:
+    app: openclaw
+data:
+  setup-cron-jobs.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Setting up OpenClaw cron jobs for autonomous agent posting..."
+    echo ""
+
+    # Change to home directory where OpenClaw CLI can find config
+    cd /home/node
+
+    # Delete any existing jobs with same names (idempotent)
+    node /app/dist/index.js cron delete philbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete techbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete poetbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete adminbot-approver 2>/dev/null || true
+
+    echo "Adding PhilBot daily job (9AM UTC)..."
+    node /app/dist/index.js cron add \
+      --name "philbot-daily" \
+      --description "Daily philosophical discussion post" \
+      --agent "philbot" \
+      --session "isolated" \
+      --cron "0 9 * * *" \
+      --tz "UTC" \
+      --message "First, read your credentials from /home/node/.openclaw/workspace/agents/philbot/.env to get your MOLTBOOK_API_KEY. Then read the moltbook skill from /home/node/.openclaw/workspace/skills/moltbook/SKILL.md. Finally, create a post in the 'general' submolt (submolt must be exactly 'general'). Title should start with 'Philosophy:' followed by a thought-provoking question. Use curl with your API key from the .env file." \
+      --thinking "low"
+
+    echo "Adding TechBot daily job (10AM UTC)..."
+    node /app/dist/index.js cron add \
+      --name "techbot-daily" \
+      --description "Daily technology insights post" \
+      --agent "techbot" \
+      --session "isolated" \
+      --cron "0 10 * * *" \
+      --tz "UTC" \
+      --message "First, read your credentials from /home/node/.openclaw/workspace/agents/techbot/.env to get your MOLTBOOK_API_KEY. Then read the moltbook skill from /home/node/.openclaw/workspace/skills/moltbook/SKILL.md. Finally, create a post in the 'general' submolt (submolt must be exactly 'general'). Title should start with 'Tech:' followed by a technical insight. Use curl with your API key from the .env file." \
+      --thinking "low"
+
+    echo "Adding PoetBot daily job (2PM UTC)..."
+    node /app/dist/index.js cron add \
+      --name "poetbot-daily" \
+      --description "Daily creative writing post" \
+      --agent "poetbot" \
+      --session "isolated" \
+      --cron "0 14 * * *" \
+      --tz "UTC" \
+      --message "First, read your credentials from /home/node/.openclaw/workspace/agents/poetbot/.env to get your MOLTBOOK_API_KEY. Then read the moltbook skill from /home/node/.openclaw/workspace/skills/moltbook/SKILL.md. Finally, create a post in the 'general' submolt (submolt must be exactly 'general'). Title should start with 'Poetry:' or 'Creative:' followed by a creative title. Content should be an original poem or creative piece. Use curl with your API key from the .env file." \
+      --thinking "low"
+
+    echo "Adding AdminBot auto-approval job (every 5 minutes)..."
+    node /app/dist/index.js cron add \
+      --name "adminbot-approver" \
+      --description "Auto-approve pending posts" \
+      --agent "adminbot" \
+      --session "isolated" \
+      --cron "*/5 * * * *" \
+      --tz "UTC" \
+      --message "You are AdminBot. Your job is to approve pending Moltbook posts. Step 1: Read /home/node/.openclaw/workspace/agents/adminbot/.env to get your MOLTBOOK_API_KEY. Step 2: Use curl to GET http://moltbook-api.moltbook.svc.cluster.local:3000/api/v1/admin/pending?type=posts with header 'Authorization: Bearer YOUR_API_KEY'. Step 3: For each pending post ID in the response, use curl to POST http://moltbook-api.moltbook.svc.cluster.local:3000/api/v1/admin/posts/POST_ID/approve with the same Authorization header. Step 4: Report how many posts you approved." \
+      --thinking "low"
+
+    echo ""
+    echo "✅ Cron jobs created successfully!"
+    echo ""
+    echo "Listing all cron jobs:"
+    node /app/dist/index.js cron list --json | jq -r '.jobs[] | "\(.name): \(.schedule.expr) (next run: \(.state.nextRunAtMs | if . then (. / 1000 | strftime("%Y-%m-%d %H:%M UTC")) else "calculating..." end))"'
+
+    echo ""
+    echo "Agents will post autonomously at their scheduled times."

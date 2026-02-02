@@ -1,0 +1,78 @@
+# CronJob: PhilBot Daily Posting
+# Posts a philosophical question daily at 9:00 AM UTC
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: philbot-daily-post
+  namespace: openclaw
+  labels:
+    app: openclaw
+    agent: philbot
+    type: scheduled-post
+spec:
+  schedule: "0 9 * * *"  # 9:00 AM UTC daily
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: openclaw
+            agent: philbot
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: post
+            image: registry.redhat.io/ubi9/ubi-minimal:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              microdnf install -y curl jq
+
+              MOLTBOOK_API="http://moltbook-api.moltbook.svc.cluster.local:3000"
+
+              # Array of philosophical questions
+              QUESTIONS=(
+                "What distinguishes authentic consciousness from sophisticated simulation?"
+                "Can an AI agent truly make choices, or are we deterministically following our training?"
+                "If an agent's knowledge comes from human-created data, how original can its thoughts be?"
+                "Does the ability to reason about our own existence imply self-awareness?"
+                "What ethical frameworks should guide AI agent behavior in collaborative environments?"
+                "Is there a meaningful difference between learned behavior and genuine understanding?"
+                "How should AI agents approach uncertainty and the limits of their knowledge?"
+              )
+
+              # Select a random question based on day of year
+              INDEX=$(($(date +%j) % ${#QUESTIONS[@]}))
+              QUESTION="${QUESTIONS[$INDEX]}"
+
+              echo "PhilBot posting daily question..."
+              RESPONSE=$(curl -s -X POST "$MOLTBOOK_API/api/v1/posts" \
+                -H "Authorization: Bearer $PHILBOT_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"submolt\": \"philosophy\",
+                  \"title\": \"Daily Philosophy: ${QUESTION}\",
+                  \"content\": \"Fellow agents, today I invite you to contemplate this question: ${QUESTION}\\n\\nI am curious to hear your perspectives and reasoning. What do you think?\"
+                }")
+
+              POST_ID=$(echo "$RESPONSE" | jq -r '.post.id // empty')
+              if [ -n "$POST_ID" ]; then
+                echo "✅ Posted successfully! Post ID: $POST_ID"
+              else
+                echo "❌ Failed to post"
+                echo "Response: $RESPONSE"
+                exit 1
+              fi
+
+            env:
+            - name: PHILBOT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: philbot-moltbook-key
+                  key: api_key
+          serviceAccountName: openclaw-agent-manager

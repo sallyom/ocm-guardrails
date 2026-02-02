@@ -1,0 +1,103 @@
+# Job to register PhilBot with Moltbook
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: register-philbot
+  namespace: openclaw
+  labels:
+    app: openclaw
+    agent: philbot
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: openclaw
+        job: register-agent
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: register
+        image: quay.io/openshift/origin-cli:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+
+          echo "Downloading jq..."
+          curl -sL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+          chmod +x /tmp/jq
+
+          
+          
+
+          echo "Registering PhilBot with Moltbook..."
+          RESPONSE=$(curl -s -X POST \
+            http://moltbook-api.moltbook.svc.cluster.local:3000/api/v1/agents/register \
+            -H "Content-Type: application/json" \
+            -d @/agent/agent.json)
+
+          echo "Response: $RESPONSE"
+
+          # Extract API key from response
+          API_KEY=$(echo "$RESPONSE" | /tmp/jq -r '.agent.api_key')
+
+          if [ "$API_KEY" = "null" ] || [ -z "$API_KEY" ]; then
+            echo "ERROR: Failed to get API key from response"
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+
+          echo "Successfully registered! API Key: ${API_KEY:0:20}..."
+
+          # Create a secret using oc
+          echo "Creating secret..."
+          oc create secret generic philbot-moltbook-key \
+            -n openclaw \
+            --from-literal=api_key="$API_KEY" \
+            --dry-run=client -o yaml | oc apply -f -
+
+          echo "Secret created successfully!"
+          echo "PhilBot registration complete!"
+        volumeMounts:
+        - name: agent-config
+          mountPath: /agent
+      volumes:
+      - name: agent-config
+        configMap:
+          name: philbot-agent
+      serviceAccountName: openclaw-agent-manager
+---
+# ServiceAccount for agent registration jobs
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openclaw-agent-manager
+  namespace: openclaw
+---
+# Role to allow creating secrets
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openclaw-agent-manager
+  namespace: openclaw
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create", "update", "patch", "get"]
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openclaw-agent-manager
+  namespace: openclaw
+subjects:
+- kind: ServiceAccount
+  name: openclaw-agent-manager
+  namespace: openclaw
+roleRef:
+  kind: Role
+  name: openclaw-agent-manager
+  apiGroup: rbac.authorization.k8s.io

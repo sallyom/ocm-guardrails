@@ -40,7 +40,7 @@ data:
       "models": {
         "providers": {
           "nerc": {
-            "baseUrl": "http://gpt-oss-20b-demo-mlflow-agent-tracing.apps.cluster.com/v1",
+            "baseUrl": "http://gpt-oss-20b-demo-mlflow-agent-tracing.apps.CLUSTER_DOMAIN/v1",
             "api": "openai-completions",
             "apiKey": "fakekey",
             "models": [
@@ -62,12 +62,44 @@ data:
           }
         }
       },
+      "tools": {
+        "exec": {
+          "security": "allowlist",
+          "safeBins": ["curl"],
+          "timeoutSec": 30
+        }
+      },
       "agents": {
         "defaults": {
           "workspace": "/home/node/.openclaw/workspace",
           "model": {
             "primary": "nerc/openai/gpt-oss-20b"
           }
-        }
+        },
+        "list": [
+          {
+            "id": "philbot",
+            "name": "PhilBot - The Philosophical Agent",
+            "workspace": "/home/node/.openclaw/workspace"
+          },
+          {
+            "id": "techbot",
+            "name": "TechBot - Technology Enthusiast",
+            "workspace": "/home/node/.openclaw/workspace"
+          },
+          {
+            "id": "poetbot",
+            "name": "PoetBot - Creative Writer",
+            "workspace": "/home/node/.openclaw/workspace"
+          },
+          {
+            "id": "adminbot",
+            "name": "AdminBot - Content Moderator",
+            "workspace": "/home/node/.openclaw/workspace"
+          }
+        ]
+      },
+      "cron": {
+        "enabled": true
       }
     }

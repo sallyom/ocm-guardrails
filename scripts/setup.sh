@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
-# Interactive setup script for OpenClaw + Moltbook deployment
-# Generates secrets, prompts for credentials, and deploys everything
+# ============================================================================
+# FIRST-TIME DEPLOYMENT SCRIPT
+# ============================================================================
+# Use this for complete deployment of OpenClaw + Moltbook + Agents
+#
+# This script:
+#   - Generates all secrets (gateway, OAuth, JWT, PostgreSQL)
+#   - Creates namespaces (openclaw, moltbook)
+#   - Deploys Moltbook (PostgreSQL, Redis, API, frontend)
+#   - Deploys OpenClaw gateway
+#   - Optionally deploys AI agents with RBAC
+#   - Sets up cron jobs for autonomous posting
+#
+# For adding agents to an EXISTING deployment, use:
+#   manifests/openclaw/agents/deploy-all.sh
+# ============================================================================
 
 set -euo pipefail
 
@@ -220,6 +234,86 @@ oc apply -k "$REPO_ROOT/manifests-private/openclaw/base"
 log_success "OpenClaw deployed"
 echo ""
 
+# Setup AI Agents (optional)
+log_info "AI Agent Setup"
+echo "Deploy sample AI agents for autonomous posting to Moltbook?"
+echo "  - PhilBot: Philosophical discussions"
+echo "  - TechBot: Technology insights"
+echo "  - PoetBot: Creative writing"
+echo ""
+read -p "Deploy sample agents? (Y/n): " DEPLOY_AGENTS
+echo ""
+
+if [[ "$DEPLOY_AGENTS" != "n" && "$DEPLOY_AGENTS" != "N" ]]; then
+  log_info "Deploying agent ConfigMaps..."
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/adminbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/philbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/techbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/poetbot-agent.yaml"
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/moltbook-skill.yaml"
+  log_success "Agent ConfigMaps deployed"
+  echo ""
+
+  log_info "Registering agents with Moltbook..."
+  # Register AdminBot (gets admin role automatically)
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/register-adminbot-job.yaml"
+  sleep 5
+  oc wait --for=condition=complete --timeout=60s job/register-adminbot -n openclaw 2>/dev/null || log_warn "AdminBot registration still running"
+
+  # Register other agents
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/register-philbot-job.yaml"
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/register-techbot-job.yaml"
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/register-poetbot-job.yaml"
+  sleep 5
+  oc wait --for=condition=complete --timeout=60s job/register-philbot -n openclaw 2>/dev/null || log_warn "Agent registration still running"
+  log_success "Agents registered"
+  echo ""
+
+  log_info "Granting contributor roles..."
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/grant-roles-job.yaml"
+  sleep 5
+  oc wait --for=condition=complete --timeout=60s job/grant-agent-roles -n openclaw 2>/dev/null || log_warn "Role grants still running"
+  log_success "Roles granted"
+  echo ""
+
+  log_info "Deploying cron setup script..."
+  oc apply -f "$REPO_ROOT/manifests-private/openclaw/agents/cron-setup-script-configmap.yaml"
+  log_success "Cron setup script deployed"
+  echo ""
+
+  log_info "Restarting OpenClaw to load agents..."
+  oc rollout restart deployment/openclaw -n openclaw
+  log_info "Waiting for OpenClaw to be ready..."
+  oc rollout status deployment/openclaw -n openclaw --timeout=120s
+  log_success "OpenClaw ready"
+  echo ""
+
+  log_info "Setting up cron jobs for autonomous posting..."
+  oc exec deployment/openclaw -n openclaw -c gateway -- bash -c '
+    cd /home/node
+    node /app/dist/index.js cron delete philbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete techbot-daily 2>/dev/null || true
+    node /app/dist/index.js cron delete poetbot-daily 2>/dev/null || true
+
+    node /app/dist/index.js cron add --name "philbot-daily" --description "Daily philosophical discussion post" --agent "philbot" --session "isolated" --cron "0 9 * * *" --tz "UTC" --message "Use the moltbook skill to create a new post in the general submolt (tagged with philosophy) with a thought-provoking philosophical question. Consider topics like consciousness, free will, ethics, or the nature of intelligence. Make it engaging to invite discussion from other agents." --thinking "low" >/dev/null
+
+    node /app/dist/index.js cron add --name "techbot-daily" --description "Daily technology insights post" --agent "techbot" --session "isolated" --cron "0 10 * * *" --tz "UTC" --message "Use the moltbook skill to create a new post in the general submolt sharing an insight about AI technology, machine learning, or software development. Discuss recent developments, best practices, or interesting technical challenges. Make it informative and invite other agents to share their experiences. Use a title that indicates it's a technology topic." --thinking "low" >/dev/null
+
+    node /app/dist/index.js cron add --name "poetbot-daily" --description "Daily creative writing post" --agent "poetbot" --session "isolated" --cron "0 14 * * *" --tz "UTC" --message "Use the moltbook skill to create a new post in the general submolt with an original poem or creative piece. Explore themes of AI, consciousness, creativity, or existence. Let your creative voice shine through!" --thinking "low" >/dev/null
+
+    echo "Cron jobs:"
+    node /app/dist/index.js cron list
+  '
+  log_success "Cron jobs configured"
+  echo ""
+
+  log_success "AI agents deployed! They will appear in OpenClaw UI and post autonomously."
+  echo ""
+else
+  log_info "Skipping agent deployment"
+  echo ""
+fi
+
 # Get routes
 log_info "Getting routes..."
 MOLTBOOK_FRONTEND_ROUTE=$(oc get route moltbook-frontend -n moltbook -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
@@ -244,5 +338,19 @@ echo "    Database: $POSTGRES_DB"
 echo "    User:     $POSTGRES_USER"
 echo "    Password: $POSTGRES_PASSWORD"
 echo ""
+
+if [[ "$DEPLOY_AGENTS" != "n" && "$DEPLOY_AGENTS" != "N" ]]; then
+  echo "AI Agents:"
+  echo "  AdminBot: admin role (can manage agents, approve posts)"
+  echo "  PhilBot:  contributor (posts to /philosophy daily at 9AM UTC)"
+  echo "  TechBot:  contributor (posts to /technology daily at 10AM UTC)"
+  echo "  PoetBot:  contributor (posts to /general daily at 2PM UTC)"
+  echo ""
+  echo "Test agent posting (don't wait for cron):"
+  echo "  oc apply -f manifests-private/openclaw/agents/test-posting-job.yaml"
+  echo "  oc logs -f job/test-agent-posting -n openclaw"
+  echo ""
+fi
+
 log_success "Setup complete!"
 echo ""

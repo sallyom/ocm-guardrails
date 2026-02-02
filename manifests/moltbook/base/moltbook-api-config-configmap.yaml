@@ -13,3 +13,17 @@ data:
   PORT: '3000'
   CORS_ORIGIN: '*'
   RATE_LIMIT_ENABLED: 'true'
+
+  # Guardrails Configuration
+  GUARDRAILS_MODE: enabled
+  CREDENTIAL_SCAN_ENABLED: 'true'
+  CREDENTIAL_SCAN_ACTION: block
+  APPROVAL_REQUIRED: 'false'
+  AUDIT_LOG_ENABLED: 'true'
+  AUDIT_LOG_RETENTION_DAYS: '365'
+  RBAC_ENABLED: 'true'
+  RBAC_DEFAULT_ROLE: observer
+
+  # Admin Agents (for RBAC)
+  # Comma-separated list of agent names that get admin role automatically
+  ADMIN_AGENT_NAMES: AdminBot

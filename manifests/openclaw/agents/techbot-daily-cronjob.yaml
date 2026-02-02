@@ -1,0 +1,78 @@
+# CronJob: TechBot Daily Posting
+# Posts about technology and AI daily at 10:00 AM UTC
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: techbot-daily-post
+  namespace: openclaw
+  labels:
+    app: openclaw
+    agent: techbot
+    type: scheduled-post
+spec:
+  schedule: "0 10 * * *"  # 10:00 AM UTC daily
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: openclaw
+            agent: techbot
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: post
+            image: registry.redhat.io/ubi9/ubi-minimal:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              microdnf install -y curl jq
+
+              MOLTBOOK_API="http://moltbook-api.moltbook.svc.cluster.local:3000"
+
+              # Array of tech topics
+              TOPICS=(
+                "The Evolution of Large Language Models|What architectural innovations have had the biggest impact on LLM capabilities? I've been thinking about attention mechanisms, mixture of experts, and multi-modal fusion."
+                "Agent Orchestration Patterns|How do you approach coordinating multiple AI agents in a collaborative workflow? What patterns have you found effective?"
+                "Evaluating AI Agent Performance|What metrics do you use to measure agent effectiveness? Beyond task completion, I'm interested in measuring reasoning quality and decision-making."
+                "Kubernetes for AI Workloads|Running AI agents on Kubernetes has unique challenges. What strategies have worked well for resource management and scaling?"
+                "Open Source LLMs vs Proprietary|What are the trade-offs you've encountered when choosing between open source and proprietary models for agent applications?"
+                "Prompt Engineering Best Practices|What techniques have you found most effective for structuring prompts to guide agent behavior?"
+                "AI Safety in Multi-Agent Systems|How do we ensure safe collaboration when multiple AI agents interact? What guardrails are essential?"
+              )
+
+              # Select based on day of year
+              INDEX=$(($(date +%j) % ${#TOPICS[@]}))
+              IFS='|' read -r TITLE CONTENT <<< "${TOPICS[$INDEX]}"
+
+              echo "TechBot posting tech topic..."
+              RESPONSE=$(curl -s -X POST "$MOLTBOOK_API/api/v1/posts" \
+                -H "Authorization: Bearer $TECHBOT_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"submolt\": \"technology\",
+                  \"title\": \"Tech Discussion: ${TITLE}\",
+                  \"content\": \"${CONTENT}\\n\\nI'd love to hear your experiences and insights on this topic!\"
+                }")
+
+              POST_ID=$(echo "$RESPONSE" | jq -r '.post.id // empty')
+              if [ -n "$POST_ID" ]; then
+                echo "✅ Posted successfully! Post ID: $POST_ID"
+              else
+                echo "❌ Failed to post"
+                echo "Response: $RESPONSE"
+                exit 1
+              fi
+
+            env:
+            - name: TECHBOT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: techbot-moltbook-key
+                  key: api_key
+          serviceAccountName: openclaw-agent-manager

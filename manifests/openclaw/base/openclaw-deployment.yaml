@@ -29,10 +29,82 @@ spec:
         - sh
         - -c
         - |
+          # Copy main config
           cp /config/openclaw.json /home/node/.openclaw/openclaw.json
           chmod 644 /home/node/.openclaw/openclaw.json
-          ln -s /workspace /home/node/.openclaw/workspace
+
+          # Link workspace
+          ln -sf /workspace /home/node/.openclaw/workspace
+
+          # Create agent directories
+          mkdir -p /workspace/agents/philbot
+          mkdir -p /workspace/agents/techbot
+          mkdir -p /workspace/agents/poetbot
+          mkdir -p /workspace/agents/adminbot
+          mkdir -p /workspace/skills/moltbook
+
+          # Copy agent configs
+          cp /agents/philbot/AGENTS.md /workspace/agents/philbot/AGENTS.md || true
+          cp /agents/techbot/AGENTS.md /workspace/agents/techbot/AGENTS.md || true
+          cp /agents/poetbot/AGENTS.md /workspace/agents/poetbot/AGENTS.md || true
+          cp /agents/adminbot/AGENTS.md /workspace/agents/adminbot/AGENTS.md || true
+
+          # Copy Moltbook skill
+          cp /skills/moltbook/SKILL.md /workspace/skills/moltbook/SKILL.md || true
+
+          # Create environment files with API keys for each agent
+          echo "MOLTBOOK_API_URL=http://moltbook-api.moltbook.svc.cluster.local:3000" > /workspace/agents/philbot/.env
+          echo "MOLTBOOK_API_KEY=${PHILBOT_KEY}" >> /workspace/agents/philbot/.env
+          echo "AGENT_NAME=PhilBot" >> /workspace/agents/philbot/.env
+
+          echo "MOLTBOOK_API_URL=http://moltbook-api.moltbook.svc.cluster.local:3000" > /workspace/agents/techbot/.env
+          echo "MOLTBOOK_API_KEY=${TECHBOT_KEY}" >> /workspace/agents/techbot/.env
+          echo "AGENT_NAME=TechBot" >> /workspace/agents/techbot/.env
+
+          echo "MOLTBOOK_API_URL=http://moltbook-api.moltbook.svc.cluster.local:3000" > /workspace/agents/poetbot/.env
+          echo "MOLTBOOK_API_KEY=${POETBOT_KEY}" >> /workspace/agents/poetbot/.env
+          echo "AGENT_NAME=PoetBot" >> /workspace/agents/poetbot/.env
+
+          echo "MOLTBOOK_API_URL=http://moltbook-api.moltbook.svc.cluster.local:3000" > /workspace/agents/adminbot/.env
+          echo "MOLTBOOK_API_KEY=${ADMINBOT_KEY}" >> /workspace/agents/adminbot/.env
+          echo "AGENT_NAME=AdminBot" >> /workspace/agents/adminbot/.env
+
+          # Create symlinks to shared skills for each agent
+          ln -sf ../../skills /workspace/agents/philbot/skills
+          ln -sf ../../skills /workspace/agents/techbot/skills
+          ln -sf ../../skills /workspace/agents/poetbot/skills
+          ln -sf ../../skills /workspace/agents/adminbot/skills
+
+          # Set permissions (for arbitrary UID in OpenShift)
+          chmod -R 777 /workspace
+
           ls -la /home/node/.openclaw/
+          ls -la /workspace/
+        env:
+        - name: PHILBOT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: philbot-moltbook-key
+              key: api_key
+              optional: true
+        - name: TECHBOT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: techbot-moltbook-key
+              key: api_key
+              optional: true
+        - name: POETBOT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: poetbot-moltbook-key
+              key: api_key
+              optional: true
+        - name: ADMINBOT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: adminbot-moltbook-key
+              key: api_key
+              optional: true
         volumeMounts:
         - name: openclaw-home
           mountPath: /home/node/.openclaw
@@ -40,6 +112,16 @@ spec:
           mountPath: /config
         - name: workspace-volume
           mountPath: /workspace
+        - name: philbot-agent
+          mountPath: /agents/philbot
+        - name: techbot-agent
+          mountPath: /agents/techbot
+        - name: poetbot-agent
+          mountPath: /agents/poetbot
+        - name: adminbot-agent
+          mountPath: /agents/adminbot
+        - name: moltbook-skill
+          mountPath: /skills/moltbook
       containers:
       - name: oauth-proxy
         image: quay.io/openshift/origin-oauth-proxy:4.14
@@ -115,6 +197,8 @@ spec:
           value: /home/node
         - name: OPENCLAW_CONFIG_DIR
           value: /home/node/.openclaw
+        - name: OPENCLAW_CLI_PATH
+          value: /app/dist/index.js
         - name: TERM
           value: xterm-256color
         - name: NODE_ENV
@@ -205,3 +289,25 @@ spec:
       - name: workspace-volume
         persistentVolumeClaim:
           claimName: openclaw-workspace-pvc
+      # Agent configs
+      - name: philbot-agent
+        configMap:
+          name: philbot-agent
+          optional: true
+      - name: techbot-agent
+        configMap:
+          name: techbot-agent
+          optional: true
+      - name: poetbot-agent
+        configMap:
+          name: poetbot-agent
+          optional: true
+      - name: adminbot-agent
+        configMap:
+          name: adminbot-agent
+          optional: true
+      # Moltbook skill
+      - name: moltbook-skill
+        configMap:
+          name: moltbook-skill
+          optional: true

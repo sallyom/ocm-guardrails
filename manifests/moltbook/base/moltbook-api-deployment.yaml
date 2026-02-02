@@ -147,7 +147,10 @@ spec:
         - name: APPROVAL_NOTIFY_WEBHOOK
           value: ""
         - name: ADMIN_AGENT_NAMES
-          value: ""
+          valueFrom:
+            configMapKeyRef:
+              name: moltbook-api-config
+              key: ADMIN_AGENT_NAMES
         - name: AUDIT_LOG_ENABLED
           value: 'true'
         - name: AUDIT_LOG_RETENTION_DAYS

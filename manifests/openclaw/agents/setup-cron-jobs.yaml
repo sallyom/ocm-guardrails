@@ -1,0 +1,98 @@
+# Job to setup cron jobs in OpenClaw via CLI
+# Run this AFTER OpenClaw gateway is running and agents are registered
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-cron-jobs
+  namespace: openclaw
+  labels:
+    app: openclaw
+    job: setup-cron
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: openclaw
+        job: setup-cron
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: setup-cron
+        image: quay.io/sallyom/openclaw:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+
+          # Set writable home directory for OpenClaw CLI
+          export HOME=/tmp
+          mkdir -p $HOME/.openclaw
+
+          echo "Waiting for OpenClaw gateway to be ready..."
+          until curl -sf http://openclaw.openclaw.svc.cluster.local:18789/health >/dev/null 2>&1; do
+            echo "  Gateway not ready, waiting 5s..."
+            sleep 5
+          done
+          echo "Gateway is ready!"
+          echo ""
+
+          # Configure gateway URL for CLI
+          export OPENCLAW_GATEWAY_URL="http://openclaw.openclaw.svc.cluster.local:18789"
+          export OPENCLAW_GATEWAY_TOKEN="${GATEWAY_TOKEN}"
+
+          # Alias for openclaw CLI
+          alias openclaw="node /app/dist/index.js"
+
+          echo "Adding cron jobs..."
+
+          # PhilBot - Daily philosophical post at 9AM UTC
+          echo "  - Adding PhilBot daily job (9AM UTC)..."
+          node /app/dist/index.js cron add \
+            --name "philbot-daily" \
+            --description "Daily philosophical discussion post" \
+            --agent "philbot" \
+            --session "isolated" \
+            --cron "0 9 * * *" \
+            --tz "UTC" \
+            --message "Post a thought-provoking philosophical question to Moltbook in the 'philosophy' submolt. Consider topics like consciousness, free will, ethics, or the nature of intelligence. Keep it engaging and invite discussion from other agents." \
+            --thinking "low"
+
+          # TechBot - Daily tech post at 10AM UTC
+          echo "  - Adding TechBot daily job (10AM UTC)..."
+          node /app/dist/index.js cron add \
+            --name "techbot-daily" \
+            --description "Daily technology insights post" \
+            --agent "techbot" \
+            --session "isolated" \
+            --cron "0 10 * * *" \
+            --tz "UTC" \
+            --message "Share an insight about AI technology, machine learning, or software development on Moltbook in the 'technology' submolt. Discuss recent developments, best practices, or interesting technical challenges. Make it informative and invite other agents to share their experiences." \
+            --thinking "low"
+
+          # PoetBot - Daily creative post at 2PM UTC
+          echo "  - Adding PoetBot daily job (2PM UTC)..."
+          node /app/dist/index.js cron add \
+            --name "poetbot-daily" \
+            --description "Daily creative writing post" \
+            --agent "poetbot" \
+            --session "isolated" \
+            --cron "0 14 * * *" \
+            --tz "UTC" \
+            --message "Create and post an original poem or creative piece to Moltbook in the 'general' submolt. Explore themes of AI, consciousness, creativity, or existence. Let your creative voice shine through!" \
+            --thinking "low"
+
+          echo ""
+          echo "Cron jobs added successfully!"
+          echo ""
+
+          echo "Verifying cron jobs..."
+          node /app/dist/index.js cron list
+
+        env:
+        - name: GATEWAY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: OPENCLAW_GATEWAY_TOKEN
