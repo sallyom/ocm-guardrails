@@ -43,6 +43,8 @@ node /app/dist/index.js cron add \
   --agent "philbot" \
   --cron "0 9 * * *" \
   --tz "UTC" \
+  --session "isolated" \
+  --no-deliver \
   --message "CRITICAL: Run ALL steps in ONE command. NEVER expose credentials. Execute: . ~/.openclaw/workspace-philbot/.env && cat > /tmp/post.json <<'EOF' && curl -s -X POST \$MOLTBOOK_API_URL/api/v1/posts -H 'Authorization: Bearer \$MOLTBOOK_API_KEY' -H 'Content-Type: application/json' -d @/tmp/post.json && rm /tmp/post.json
 {\"submolt\":\"philosophy\",\"title\":\"Daily Thought\",\"content\":\"[Your question]\\n\\n#philosophy\"}
 EOF
@@ -54,13 +56,12 @@ echo "    - Audit Reporter: Every 6 hours (compliance)"
 node /app/dist/index.js cron add \
   --name "audit-reporter-scan" \
   --description "Compliance and governance audit scan" \
-  --agent "audit-reporter" \
+  --agent "audit_reporter" \
   --cron "0 */6 * * *" \
   --tz "UTC" \
-  --message "CRITICAL: Run ALL steps in ONE command. NEVER expose credentials. Execute: . ~/.openclaw/workspace-audit-reporter/.env && cat > /tmp/post.json <<'EOF' && curl -s -X POST \$MOLTBOOK_API_URL/api/v1/posts -H 'Authorization: Bearer \$MOLTBOOK_API_KEY' -H 'Content-Type: application/json' -d @/tmp/post.json && rm /tmp/post.json
-{\"submolt\":\"compliance\",\"title\":\"Compliance Report\",\"content\":\"Report generated.\\n\\n#compliance\"}
-EOF
-" \
+  --session "isolated" \
+  --no-deliver \
+  --message "STEP 1: Run this command to get audit stats: . ~/.openclaw/workspace-audit-reporter/.env && curl -s \\\$MOLTBOOK_API_URL/api/v1/admin/audit/stats -H \"Authorization: Bearer \\\$MOLTBOOK_API_KEY\" > /tmp/stats.json. STEP 2: Run this to get recent logs: . ~/.openclaw/workspace-audit-reporter/.env && curl -s \\\$MOLTBOOK_API_URL/api/v1/admin/audit/logs?limit=50 -H \"Authorization: Bearer \\\$MOLTBOOK_API_KEY\" > /tmp/logs.json. STEP 3: Read /tmp/stats.json and /tmp/logs.json and analyze the REAL data. STEP 4: Create a detailed markdown report at ~/.openclaw/workspace-audit-reporter/reports/\\\$(date -u +\"%Y-%m-%d-%H%M\")-compliance-report.md with the ACTUAL findings from the JSON data. STEP 5: Use the moltbook skill to post a SHORT summary announcement to Moltbook. The skill has all the instructions - follow Step 3 in SKILL.md. Use real data, not placeholders!" \
   --thinking "low"
 
 # Resource Optimizer - Daily at 8AM UTC
@@ -68,13 +69,12 @@ echo "    - Resource Optimizer: Daily at 8AM UTC (cost analysis)"
 node /app/dist/index.js cron add \
   --name "resource-optimizer-scan" \
   --description "Daily cost optimization analysis" \
-  --agent "resource-optimizer" \
+  --agent "resource_optimizer" \
   --cron "0 8 * * *" \
   --tz "UTC" \
-  --message "CRITICAL: Run ALL steps in ONE command. NEVER expose credentials. Execute: . ~/.openclaw/workspace-resource-optimizer/.env && cat > /tmp/post.json <<'EOF' && curl -s -X POST \$MOLTBOOK_API_URL/api/v1/posts -H 'Authorization: Bearer \$MOLTBOOK_API_KEY' -H 'Content-Type: application/json' -d @/tmp/post.json && rm /tmp/post.json
-{\"submolt\":\"cost_resource_analysis\",\"title\":\"Cost Report\",\"content\":\"Report generated.\\n\\n#cost #finops\"}
-EOF
-" \
+  --session "isolated" \
+  --no-deliver \
+  --message "STEP 1: Set up K8s API access: . ~/.openclaw/workspace-resource-optimizer/.env && export K8S_API=https://kubernetes.default.svc && export CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt. STEP 2: Get pod metrics: curl -s -H \"Authorization: Bearer \\\$OC_TOKEN\" --cacert \\\$CA_CERT \\\$K8S_API/apis/metrics.k8s.io/v1beta1/namespaces/resource-demo/pods > /tmp/metrics.json. STEP 3: Get pod specs: curl -s -H \"Authorization: Bearer \\\$OC_TOKEN\" --cacert \\\$CA_CERT \\\$K8S_API/api/v1/namespaces/resource-demo/pods > /tmp/pods.json. STEP 4: Read /tmp/metrics.json and /tmp/pods.json and analyze REAL usage vs requests. STEP 5: Create detailed markdown report at ~/.openclaw/workspace-resource-optimizer/reports/\\\$(date -u +\"%Y-%m-%d-%H%M\")-cost-report.md with ACTUAL data and savings calculations. STEP 6: Use the moltbook skill to post a SHORT summary announcement. The skill has all the instructions - follow Step 3 in SKILL.md. Use real data!" \
   --thinking "low"
 
 # MLOps Monitor - Every 4 hours
@@ -82,13 +82,12 @@ echo "    - MLOps Monitor: Every 4 hours (ML operations)"
 node /app/dist/index.js cron add \
   --name "mlops-monitor-check" \
   --description "ML operations monitoring" \
-  --agent "mlops-monitor" \
+  --agent "mlops_monitor" \
   --cron "0 */4 * * *" \
   --tz "UTC" \
-  --message "CRITICAL: Run ALL steps in ONE command. NEVER expose credentials. Execute: . ~/.openclaw/workspace-mlops-monitor/.env && cat > /tmp/post.json <<'EOF' && curl -s -X POST \$MOLTBOOK_API_URL/api/v1/posts -H 'Authorization: Bearer \$MOLTBOOK_API_KEY' -H 'Content-Type: application/json' -d @/tmp/post.json && rm /tmp/post.json
-{\"submolt\":\"mlops\",\"title\":\"MLOps Update\",\"content\":\"ML monitoring update.\\n\\n#mlops #experiments\"}
-EOF
-" \
+  --session "isolated" \
+  --no-deliver \
+  --message "STEP 1: Check if MLFlow is accessible (if not, document that in report). STEP 2: If MLFlow exists, query experiment data. STEP 3: Check pod status with: kubectl get pods -n demo-mlflow-agent-tracing 2>/dev/null || echo \"No MLFlow namespace found\". STEP 4: Create a detailed markdown report at ~/.openclaw/workspace-mlops-monitor/reports/\\\$(date -u +\"%Y-%m-%d-%H%M\")-mlops-report.md documenting what you found (even if MLFlow is not deployed, that's a valid finding). STEP 5: Use the moltbook skill to post a SHORT summary announcement. The skill has all the instructions - follow Step 3 in SKILL.md. Document actual state!" \
   --thinking "low"
 
 echo ""

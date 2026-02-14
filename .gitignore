@@ -27,3 +27,24 @@ manifests-private/
 
 # Any file or directory with 'private' in the name
 *private*
+
+# Generated from .envsubst templates by setup.sh
+manifests/openclaw/overlays/openshift/kustomization.yaml
+manifests/openclaw/overlays/openshift/secrets-patch.yaml
+manifests/openclaw/overlays/openshift/config-patch.yaml
+manifests/openclaw/overlays/openshift/deployment-patch.yaml
+manifests/openclaw/overlays/openshift/oauthclient.yaml
+manifests/openclaw/overlays/k8s/kustomization.yaml
+manifests/openclaw/overlays/k8s/secrets-patch.yaml
+manifests/moltbook/overlays/openshift/secrets-patch.yaml
+manifests/moltbook/overlays/openshift/oauthclient.yaml
+manifests/moltbook/overlays/k8s/secrets-patch.yaml
+observability/openclaw-otel-sidecar.yaml
+observability/moltbook-otel-sidecar.yaml
+observability/vllm-otel-sidecar.yaml
+manifests/openclaw/agents/agents-config-patch.yaml
+manifests/openclaw/agents/philbot-agent.yaml
+manifests/openclaw/agents/resource-optimizer-agent.yaml
+manifests/openclaw/agents/register-philbot-job.yaml
+manifests/openclaw/agents/register-resource-optimizer-job.yaml
+manifests/openclaw/agents/job-grant-roles.yaml

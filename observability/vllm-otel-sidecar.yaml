@@ -70,7 +70,7 @@ spec:
     exporters:
       # Export to MLflow Experiment 2 (teammate's testing)
       otlphttp/experiment2:
-        endpoint: https://mlflow-route-mlflow.apps.CLUSTER_DOMAIN
+        endpoint: https://mlflow-route-mlflow.apps.apps.ocp-beta-test.nerc.mghpcc.org
         headers:
           x-mlflow-experiment-id: "2"
           x-mlflow-workspace: "vllm-testing"
@@ -79,7 +79,7 @@ spec:
 
       # Export to MLflow Experiment 4 (OpenClaw distributed tracing)
       otlphttp/experiment4:
-        endpoint: https://mlflow-route-mlflow.apps.CLUSTER_DOMAIN
+        endpoint: https://mlflow-route-mlflow.apps.apps.ocp-beta-test.nerc.mghpcc.org
         headers:
           x-mlflow-experiment-id: "4"
           x-mlflow-workspace: "openclaw"

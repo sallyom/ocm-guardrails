@@ -274,56 +274,38 @@ This repository includes three OTEL collector sidecar configurations:
 
 ### Deploy OTEL Collector Sidecars
 
-**Note:** If you used `./scripts/setup.sh`, patched versions are already created in `manifests-private/observability/`!
+**Note:** If you used `./scripts/setup.sh`, the `.envsubst` templates have already been processed and deployed.
 
 #### Option 1: Automated Deployment (Recommended)
 
-The setup script automatically creates and deploys sidecar configurations:
+The setup script automatically runs `envsubst` on sidecar templates and deploys them:
 
 ```bash
 ./scripts/setup.sh
-# Creates patched versions in manifests-private/observability/
-# - openclaw-otel-sidecar.yaml
-# - moltbook-otel-sidecar.yaml
-# - vllm-otel-sidecar.yaml
+# Generates from .envsubst templates:
+# - observability/openclaw-otel-sidecar.yaml
+# - observability/moltbook-otel-sidecar.yaml
+# - observability/vllm-otel-sidecar.yaml
 ```
 
 #### Option 2: Manual Deployment
 
-Deploy each sidecar configuration from the patched versions:
+Run `envsubst` on templates and deploy:
 
 ```bash
-# 1. Deploy OpenClaw sidecar (for openclaw namespace)
-oc apply -f manifests-private/observability/openclaw-otel-sidecar.yaml
+# Source the generated secrets
+source .env && set -a
 
-# 2. Deploy Moltbook sidecar (for moltbook namespace)
-oc apply -f manifests-private/observability/moltbook-otel-sidecar.yaml
-
-# 3. Deploy vLLM sidecar (for demo-mlflow-agent-tracing namespace)
-oc apply -f manifests-private/observability/vllm-otel-sidecar.yaml
-```
-
-#### Option 3: Create Patches Manually
-
-If you don't have `manifests-private/` created yet:
-
-```bash
-# Get your cluster domain
-CLUSTER_DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
-
-# Create patched versions
-mkdir -p manifests-private/observability
-
-for file in openclaw-otel-sidecar.yaml moltbook-otel-sidecar.yaml vllm-otel-sidecar.yaml; do
-  sed "s/CLUSTER_DOMAIN/$CLUSTER_DOMAIN/g" \
-    observability/$file > \
-    manifests-private/observability/$file
+# Generate YAML from templates
+ENVSUBST_VARS='${CLUSTER_DOMAIN}'
+for tpl in observability/*.envsubst; do
+  envsubst "$ENVSUBST_VARS" < "$tpl" > "${tpl%.envsubst}"
 done
 
-# Deploy them
-oc apply -f manifests-private/observability/openclaw-otel-sidecar.yaml
-oc apply -f manifests-private/observability/moltbook-otel-sidecar.yaml
-oc apply -f manifests-private/observability/vllm-otel-sidecar.yaml
+# Deploy each sidecar configuration
+oc apply -f observability/openclaw-otel-sidecar.yaml
+oc apply -f observability/moltbook-otel-sidecar.yaml
+oc apply -f observability/vllm-otel-sidecar.yaml
 ```
 
 #### Verify Sidecar Configurations
@@ -367,7 +349,7 @@ spec:
 
 Then apply the change:
 ```bash
-oc apply -k manifests-private/openclaw/
+oc apply -k manifests/openclaw/overlays/openshift/
 oc rollout restart deployment/openclaw-gateway -n openclaw
 ```
 
@@ -395,7 +377,7 @@ spec:
 
 Then apply the change:
 ```bash
-oc apply -k manifests-private/moltbook/
+oc apply -k manifests/moltbook/overlays/openshift/
 oc rollout restart deployment/moltbook-api -n moltbook
 ```
 
@@ -439,27 +421,26 @@ oc logs -n moltbook -l app=moltbook-api -c otc-container
 
 ### Update Cluster-Specific Values
 
-**Important:** The `observability/` directory contains templates with `CLUSTER_DOMAIN` placeholders.
+**Important:** The `observability/` directory contains `.envsubst` templates with `${CLUSTER_DOMAIN}` placeholders.
 
 **Automated (recommended):**
 ```bash
-# setup.sh automatically creates patched versions in manifests-private/
+# setup.sh runs envsubst on all templates automatically
 ./scripts/setup.sh
 ```
 
 **Manual:**
 ```bash
 # Get your cluster domain
-CLUSTER_DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
+export CLUSTER_DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
 
-# Create patched version
-mkdir -p manifests-private/observability
-sed "s/CLUSTER_DOMAIN/$CLUSTER_DOMAIN/g" \
-  observability/vllm-otel-sidecar.yaml > \
-  manifests-private/observability/vllm-otel-sidecar.yaml
+# Generate YAML from template
+envsubst '${CLUSTER_DOMAIN}' \
+  < observability/vllm-otel-sidecar.yaml.envsubst \
+  > observability/vllm-otel-sidecar.yaml
 
 # Then deploy
-oc apply -f manifests-private/observability/vllm-otel-sidecar.yaml
+oc apply -f observability/vllm-otel-sidecar.yaml
 ```
 
 ### Verify Traces in MLflow

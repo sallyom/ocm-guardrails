@@ -13,33 +13,41 @@
 ## Repository Structure
 
 ```
-ocm-platform-openshift/
+ocm-guardrails/
 ├── scripts/
-│   ├── build-and-push.sh       # Build OpenClaw + Moltbook images with podman
-│   └── setup.sh               # Deploy both to OpenShift with pre-built images
+│   ├── setup.sh                # One-command deployment (generates .env, runs envsubst, deploys)
+│   └── build-and-push.sh       # Build OpenClaw + Moltbook images with podman
+│
+├── .env                        # Generated secrets (GIT-IGNORED, created by setup.sh)
 │
 ├── manifests/
-│   ├── kubernetes/
-│   │   ├── deployment.yaml                              # Standard K8s
-│   │   └── deployment-with-existing-observability.yaml  # Uses observability-hub
-│   ├── openshift/
-│   │   └── template.yaml                                # OpenClaw OpenShift template
-│   ├── moltbook/
-│   │   └── openshift-template.yaml                      # Moltbook stack template
-│   └── openclaw/
-│       └── skills/
-│           └── moltbook-skill.yaml                      # Moltbook API skill ConfigMap
+│   ├── openclaw/
+│   │   ├── base/               # Core resources (deployment, service, PVCs, quotas, etc.)
+│   │   ├── base-k8s/           # Kubernetes-specific base (no Routes/OAuth)
+│   │   ├── overlays/
+│   │   │   ├── openshift/      # OpenShift overlay (*.yaml.envsubst templates)
+│   │   │   └── k8s/            # Vanilla Kubernetes overlay
+│   │   ├── agents/             # Agent ConfigMaps + config patch template
+│   │   └── skills/             # Skill ConfigMaps (moltbook)
+│   └── moltbook/
+│       ├── base/               # PostgreSQL, Redis, API, frontend
+│       ├── base-k8s/           # Kubernetes-specific base
+│       └── overlays/
+│           ├── openshift/      # OpenShift overlay
+│           └── k8s/            # Vanilla Kubernetes overlay
 │
 ├── observability/
-│   └── otel-collector-config.yaml  # Sample OpenTelemetry collector config
+│   ├── openclaw-otel-sidecar.yaml.envsubst  # OTEL sidecar templates
+│   ├── moltbook-otel-sidecar.yaml.envsubst
+│   └── vllm-otel-sidecar.yaml.envsubst
 │
 └── docs/
-    ├── QUICKSTART-OPENSHIFT.md        # Quick start guide
-    ├── DEPLOY-NOW.md                  # Step-by-step deployment
-    ├── RECOMMENDED-ARCHITECTURE.md    # Full architecture overview
-    ├── IMAGE-BUILD-GUIDE.md           # Image building strategies
-    ├── OPENSHIFT-SECURITY-FIXES.md    # Security compliance details
-    └── SUMMARY.md                     # Complete project summary
+    ├── ARCHITECTURE.md             # System architecture
+    ├── DEPLOY_OPENCLAW.md          # Deployment instructions
+    ├── OBSERVABILITY.md            # OpenTelemetry integration guide
+    ├── OPENSHIFT-SECURITY-FIXES.md # Security compliance details
+    ├── MOLTBOOK-GUARDRAILS-PLAN.md # Trust & safety features
+    └── SFW-DEPLOYMENT.md           # Safe-for-work configuration
 ```
 
 ## Key Design Decisions
@@ -289,28 +297,24 @@ return path.join(os.homedir(), ".openclaw", `workspace-${agentId}`);
 
 ### Important: Cluster-Specific Configuration
 
-**CLUSTER_DOMAIN Placeholder**: Many configuration files use `CLUSTER_DOMAIN` as a placeholder that must be replaced with your actual OpenShift cluster domain.
+**envsubst workflow**: Files with `.envsubst` extension contain `${VAR}` placeholders (e.g., `${CLUSTER_DOMAIN}`, `${OPENCLAW_GATEWAY_TOKEN}`). These are committed to Git.
 
-**⚠️ CRITICAL**: Always deploy from `manifests-private/` directory, NOT `manifests/`!
-
-The `manifests/` directory contains template files with placeholders like `CLUSTER_DOMAIN`. When you run `./scripts/setup.sh`, it:
+When you run `./scripts/setup.sh`, it:
 1. Detects your cluster domain automatically
-2. Creates `manifests-private/` (git-ignored) with substituted values
-3. Deploys from `manifests-private/`
+2. Generates secrets and writes them to `.env` (git-ignored)
+3. Runs `envsubst` on all `.envsubst` templates to produce the actual `.yaml` files (also git-ignored)
+4. Deploys via kustomize overlays: `oc apply -k manifests/openclaw/overlays/openshift/`
 
-**Never manually edit or deploy from `manifests/` - always use the setup script!**
+**To edit templates**: modify the `.envsubst` file, then re-run `setup.sh` (or manually run `envsubst`).
 
-If you need to manually configure something after deployment:
-1. Determine your cluster domain: `oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'`
-2. Replace `CLUSTER_DOMAIN` placeholder with the actual value (e.g., `apps.mycluster.com`)
-3. Example:
-   ```json
-   // Template in manifests/
-   "baseUrl": "http://service.apps.CLUSTER_DOMAIN/v1"
-
-   // After substitution in manifests-private/
-   "baseUrl": "http://service.apps.mycluster.com/v1"
-   ```
+If you need to manually regenerate after editing a template:
+```bash
+source .env && set -a
+envsubst '${CLUSTER_DOMAIN} ${OPENCLAW_GATEWAY_TOKEN} ...' \
+  < manifests/openclaw/overlays/openshift/secrets-patch.yaml.envsubst \
+  > manifests/openclaw/overlays/openshift/secrets-patch.yaml
+oc apply -k manifests/openclaw/overlays/openshift/
+```
 
 ## Critical Files
 
@@ -343,12 +347,12 @@ If you need to manually configure something after deployment:
 - Auto-detects cluster domain from OpenShift API
 - Generates random 32-char secrets automatically
 - Prompts for PostgreSQL credentials (or uses defaults)
-- Copies `manifests/` → `manifests-private/` (git-ignored)
-- Substitutes all secrets and cluster domain in private copy
+- Writes all secrets to `.env` (git-ignored)
+- Runs `envsubst` on all `.envsubst` templates to produce deployment YAML
 - Creates namespaces (openclaw, moltbook)
 - Deploys OTEL collectors (from observability/)
 - Creates OAuthClient (requires cluster-admin)
-- Deploys from `manifests-private/` using kustomize
+- Deploys via kustomize overlays (`manifests/openclaw/overlays/openshift/`)
 
 **Usage**:
 ```bash

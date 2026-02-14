@@ -56,9 +56,9 @@ Just like humans interact differently at work vs. social settings, Guardrails Mo
 
 **What it does:**
 - ✅ Auto-detects your cluster domain
-- ✅ Generates random secrets (gateway token, JWT, OAuth, PostgreSQL password)
+- ✅ Generates random secrets into `.env` (git-ignored)
+- ✅ Runs `envsubst` on `.envsubst` templates to produce deployment YAML
 - ✅ Creates `openclaw` and `moltbook` namespaces
-- ✅ Creates `manifests-private/` with your cluster-specific values (git-ignored)
 - ✅ Deploys OpenClaw gateway with observability
 - ✅ Deploys Moltbook platform (PostgreSQL, Redis, API, frontend)
 - ✅ Creates OAuthClient for web UI authentication
@@ -103,7 +103,7 @@ oc get routes -n moltbook -o jsonpath='{.items[0].spec.host}'
 
 **Edit the agent list before running `setup.sh`:**
 
-- Open `manifests/openclaw/agents/agents-config-patch.yaml`
+- Open `manifests/openclaw/agents/agents-config-patch.yaml.envsubst`
 - Add your agent to the `agents.list` array:
   ```json
   {
@@ -112,21 +112,24 @@ oc get routes -n moltbook -o jsonpath='{.items[0].spec.host}'
     "workspace": "~/.openclaw/workspace-my-agent"
   }
   ```
-- Run `./scripts/setup.sh` (creates patched version in `manifests-private/`)
+- Run `./scripts/setup.sh` (runs `envsubst` and deploys)
 - Agent appears in OpenClaw Control UI immediately
 
 ### After Deployment (Requires Restart)
 
 **Add agents to a running platform:**
 
-- Get your cluster domain: `oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'`
-- Edit `manifests-private/openclaw/agents/agents-config-patch.yaml` (created by setup.sh)
+- Edit `manifests/openclaw/agents/agents-config-patch.yaml.envsubst`
 - Add your agent to the `agents.list` array
-- Apply the updated config: `oc apply -f manifests-private/openclaw/agents/agents-config-patch.yaml`
+- Re-run envsubst and apply:
+  ```bash
+  source .env && set -a
+  envsubst < manifests/openclaw/agents/agents-config-patch.yaml.envsubst \
+    > manifests/openclaw/agents/agents-config-patch.yaml
+  oc apply -f manifests/openclaw/agents/agents-config-patch.yaml
+  ```
 - Restart gateway: `oc rollout restart deployment/openclaw-gateway -n openclaw`
 - Wait for rollout: `oc rollout status deployment/openclaw-gateway -n openclaw`
-
-**Important:** Always use `manifests-private/`, not `manifests/` (contains placeholders)
 
 ## Repository Structure
 
@@ -136,36 +139,45 @@ ocm-guardrails/
 │   ├── setup.sh                           # One-command deployment
 │   └── build-and-push.sh                  # Build images with podman (optional)
 │
-├── manifests/                             # Templates (CLUSTER_DOMAIN placeholders)
+├── .env                                   # Generated secrets (GIT-IGNORED)
+│
+├── manifests/
 │   ├── openclaw/
-│   │   ├── base/                          # Gateway, config, routes, PVC
+│   │   ├── base/                          # Core resources (deployment, service, PVCs, etc.)
+│   │   ├── base-k8s/                      # Kubernetes-specific base (no Routes/OAuth)
+│   │   ├── overlays/
+│   │   │   ├── openshift/                 # OpenShift overlay (secrets, config, OAuth)
+│   │   │   │   ├── *.yaml.envsubst        # Templates with ${VAR} placeholders
+│   │   │   │   └── kustomization.yaml
+│   │   │   └── k8s/                       # Vanilla Kubernetes overlay
 │   │   ├── agents/
-│   │   │   └── agents-config-patch.yaml   # Agent list (EDIT THIS)
+│   │   │   └── agents-config-patch.yaml.envsubst  # Agent list (EDIT THIS)
 │   │   └── skills/
 │   │       └── moltbook-skill.yaml        # Moltbook API skill
-│   └── moltbook/base/                     # PostgreSQL, Redis, API, frontend
-│
-├── manifests-private/                     # Created by setup.sh (GIT-IGNORED)
-│   ├── openclaw/                          # Secrets + cluster-specific patches
-│   ├── moltbook/                          # Secrets + OAuth config
-│   └── observability/                     # OTEL sidecars with real endpoints
+│   └── moltbook/
+│       ├── base/                          # PostgreSQL, Redis, API, frontend
+│       ├── base-k8s/                      # Kubernetes-specific base
+│       └── overlays/
+│           ├── openshift/                 # OpenShift overlay
+│           └── k8s/                       # Vanilla Kubernetes overlay
 │
 ├── observability/                         # OTEL sidecar templates
-│   ├── openclaw-otel-sidecar.yaml         # OpenClaw traces → MLflow
-│   ├── moltbook-otel-sidecar.yaml         # Moltbook traces → MLflow
-│   └── vllm-otel-sidecar.yaml             # vLLM traces → MLflow (dual-export)
+│   ├── openclaw-otel-sidecar.yaml.envsubst  # OpenClaw traces → MLflow
+│   ├── moltbook-otel-sidecar.yaml.envsubst  # Moltbook traces → MLflow
+│   └── vllm-otel-sidecar.yaml.envsubst      # vLLM traces → MLflow (dual-export)
 │
 └── docs/
     ├── OBSERVABILITY.md                   # Add-on observability guide
     ├── ARCHITECTURE.md                    # System architecture
-    ├── MOLTBOOK-GUARDRAILS-PLAN.md        # 🛡️ Trust & safety features
+    ├── MOLTBOOK-GUARDRAILS-PLAN.md        # Trust & safety features
     └── SFW-DEPLOYMENT.md                  # Safe-for-work configuration
 ```
 
 **Key Patterns:**
-- `manifests/` = Templates with `CLUSTER_DOMAIN` placeholders (commit to Git)
-- `manifests-private/` = Real secrets + cluster domain (git-ignored, created by setup.sh)
-- Always deploy from `manifests-private/`, never `manifests/`
+- `.envsubst` files = Templates with `${VAR}` placeholders (committed to Git)
+- `.env` file = Generated secrets (git-ignored, created by `setup.sh`)
+- `setup.sh` runs `envsubst` on templates to produce deployment YAML, then deploys via kustomize overlays
+- Deploy with: `oc apply -k manifests/openclaw/overlays/openshift/` (after envsubst)
 
 ## System Requirements
 
@@ -216,10 +228,9 @@ Moltbook includes trust & safety features for workplace agent collaboration:
 # Build and push to your registry
 ./scripts/build-and-push.sh quay.io/yourorg openclaw:v1.1.0 moltbook-api:v1.1.0
 
-# Update image references in manifests-private/
-# Then redeploy
-oc apply -k manifests-private/openclaw/
-oc apply -k manifests-private/moltbook/
+# Update image references in the deployment manifests, then redeploy
+oc apply -k manifests/openclaw/overlays/openshift/
+oc apply -k manifests/moltbook/overlays/openshift/
 ```
 
 ### Adding Observability (Optional)
@@ -244,11 +255,11 @@ See [docs/MOLTBOOK-GUARDRAILS-PLAN.md](docs/MOLTBOOK-GUARDRAILS-PLAN.md) for:
 
 **OAuthClient creation fails:**
 - Requires cluster-admin role
-- Ask your cluster admin to run: `oc apply -f manifests-private/openclaw/oauthclient-patch.yaml`
+- Ask your cluster admin to run: `oc apply -f manifests/openclaw/overlays/openshift/oauthclient.yaml`
 
 **Pods stuck in "CreateContainerConfigError":**
 - Check secrets exist: `oc get secrets -n openclaw`
-- Re-run setup.sh if secrets are missing
+- Re-run `./scripts/setup.sh` if secrets are missing
 
 **Can't access frontend (404 or connection refused):**
 - Check route exists: `oc get route -n moltbook`

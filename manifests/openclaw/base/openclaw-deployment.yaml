@@ -51,6 +51,12 @@ spec:
           mkdir -p /home/node/.openclaw/agents/shadowman/sessions
           mkdir -p /home/node/.openclaw/agents/shadowman/agent
 
+          # Dynamically create session directories for all agents defined in config
+          # This handles prefixed agent names (e.g., sallyom_philbot) without hardcoding
+          grep -o '"id": *"[^"]*"' /config/openclaw.json | sed 's/"id": *"//;s/"$//' | while read agent_id; do
+            mkdir -p "/home/node/.openclaw/agents/$agent_id/sessions"
+          done
+
           # Copy shadowman agent config (included in core deployment)
           cp /agents/shadowman/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md 2>/dev/null || echo "Warning: shadowman AGENTS.md not found"
           cp /agents/shadowman/agent.json /home/node/.openclaw/workspace/agent.json 2>/dev/null || echo "Warning: shadowman agent.json not found"
@@ -86,7 +92,7 @@ spec:
         - --pass-access-token
         - --scope=user:full
         - --openshift-delegate-urls={"/":{"resource":"projects","verb":"list"}}
-        - --skip-auth-regex=^/metrics
+        - --skip-auth-regex=^/(metrics|api)
         ports:
         - containerPort: 8443
           name: oauth-ui

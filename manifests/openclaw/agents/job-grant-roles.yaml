@@ -1,10 +1,11 @@
-# Job to grant contributor roles to all agents
+# Job to grant contributor roles to agents
 # Run this AFTER agents are registered
+# Uses direct PostgreSQL access instead of the admin API
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: grant-agent-roles
-  namespace: openclaw
+  namespace: sallyom-openclaw
   labels:
     app: openclaw
     job: grant-roles
@@ -19,7 +20,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: grant-roles
-        image: registry.redhat.io/ubi9/ubi-minimal:latest
+        image: postgres:16-alpine
         resources:
           requests:
             memory: 128Mi
@@ -28,74 +29,51 @@ spec:
             memory: 256Mi
             cpu: 200m
         command:
-        - /bin/bash
+        - /bin/sh
         - -c
         - |
           set -e
 
-          echo "Downloading jq..."
-          curl -sL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-          chmod +x /tmp/jq
-
-          
-          
-
-          MOLTBOOK_API="http://moltbook-api.moltbook.svc.cluster.local:3000"
-
-          # Use AuditReporter's API key (registered first as admin)
-          ADMIN_KEY="${ADMIN_API_KEY}"
-
-          if [ -z "$ADMIN_KEY" ]; then
-            echo "ERROR: ADMIN_API_KEY environment variable not set"
-            echo "Make sure you ran register-audit-reporter job first"
+          if [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ] || [ -z "$DB_NAME" ]; then
+            echo "ERROR: DB_USER, DB_PASSWORD, or DB_NAME not set (check moltbook-db-credentials secret)"
             exit 1
           fi
 
-          echo "Granting roles to agents..."
+          DB_HOST="moltbook-postgresql.moltbook.svc.cluster.local"
+          DB_PORT="5432"
+
+          # Write password to .pgpass to avoid shell quoting issues with special chars
+          export PGPASSFILE="/tmp/.pgpass"
+          printf '%s:%s:%s:%s:%s\n' "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" > "$PGPASSFILE"
+          chmod 600 "$PGPASSFILE"
+
+          echo "Granting contributor roles to agents..."
           echo ""
-          echo "Note: audit_reporter is already admin (auto-assigned via ADMIN_AGENT_NAMES)"
-          echo ""
 
-          # Promote PhilBot to contributor
-          echo "  - Promoting PhilBot to contributor..."
-          curl -X PATCH \
-            "$MOLTBOOK_API/api/v1/admin/agents/PhilBot/role" \
-            -H "Authorization: Bearer $ADMIN_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"role": "contributor"}' \
-            || echo "Failed to promote PhilBot (may already be promoted)"
-
-          # Promote resource_optimizer to contributor
-          echo "  - Promoting resource_optimizer to contributor..."
-          curl -X PATCH \
-            "$MOLTBOOK_API/api/v1/admin/agents/resource_optimizer/role" \
-            -H "Authorization: Bearer $ADMIN_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"role": "contributor"}' \
-            || echo "Failed to promote resource_optimizer (may already be promoted)"
-
-          # Promote mlops_monitor to contributor
-          echo "  - Promoting mlops_monitor to contributor..."
-          curl -X PATCH \
-            "$MOLTBOOK_API/api/v1/admin/agents/mlops_monitor/role" \
-            -H "Authorization: Bearer $ADMIN_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"role": "contributor"}' \
-            || echo "Failed to promote mlops_monitor (may already be promoted)"
+          psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c \
+            "UPDATE agents SET role = 'contributor' WHERE name IN ('sallyom_philbot', 'sallyom_resource_optimizer');"
 
           echo ""
           echo "Role grants complete!"
           echo ""
           echo "Verifying roles..."
-          curl -X GET \
-            "$MOLTBOOK_API/api/v1/admin/agents/by-role/contributor" \
-            -H "Authorization: Bearer $ADMIN_KEY" \
-            | /tmp/jq '.agents[] | {name, role}'
+          psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c \
+            "SELECT name, role FROM agents WHERE name IN ('sallyom_philbot', 'sallyom_resource_optimizer');"
 
         env:
-        - name: ADMIN_API_KEY
+        - name: DB_USER
           valueFrom:
             secretKeyRef:
-              name: audit-reporter-moltbook-key
-              key: api_key
+              name: moltbook-db-credentials
+              key: database-user
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: moltbook-db-credentials
+              key: database-password
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: moltbook-db-credentials
+              key: database-name
       serviceAccountName: openclaw-agent-manager

@@ -23,7 +23,7 @@ apiVersion: opentelemetry.io/v1alpha1
 kind: OpenTelemetryCollector
 metadata:
   name: openclaw-sidecar
-  namespace: openclaw
+  namespace: sallyom-openclaw
 spec:
   mode: sidecar
 
@@ -52,10 +52,10 @@ spec:
       resource:
         attributes:
           - key: service.namespace
-            value: openclaw
+            value: sallyom-openclaw
             action: upsert
           - key: k8s.namespace.name
-            value: openclaw
+            value: sallyom-openclaw
             action: upsert
           - key: deployment.environment
             value: production
@@ -94,7 +94,7 @@ spec:
       # Export to MLflow OTLP endpoint (path /v1/traces is auto-appended)
       otlphttp:
         # UPDATE TO MATCH YOUR MLFLOW ENDPOINT - Do not append /v1/traces
-        endpoint: https://mlflow-route-mlflow.apps.CLUSTER_DOMAIN
+        endpoint: https://mlflow-route-mlflow.apps.apps.ocp-beta-test.nerc.mghpcc.org
         headers:
           x-mlflow-experiment-id: "4"
           x-mlflow-workspace: "openclaw"

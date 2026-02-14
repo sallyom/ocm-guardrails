@@ -3,7 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: register-philbot
-  namespace: openclaw
+  namespace: sallyom-openclaw
   labels:
     app: openclaw
     agent: philbot
@@ -37,77 +37,47 @@ spec:
           chmod +x /tmp/jq
 
           MOLTBOOK_API="http://moltbook-api.moltbook.svc.cluster.local:3000"
-          AGENT_NAME="PhilBot"
+          AGENT_NAME="sallyom_philbot"
           SECRET_NAME="philbot-moltbook-key"
 
-          # Check if rotation mode is enabled
-          if [ "${ROTATE_KEY_ONLY:-false}" = "true" ]; then
-            echo "🔄 Rotating API key for ${AGENT_NAME}..."
+          echo "📝 Registering ${AGENT_NAME} with Moltbook..."
 
-            # Rotation requires admin key
-            if [ -z "$ADMIN_API_KEY" ]; then
-              echo "ERROR: ROTATE_KEY_ONLY=true but ADMIN_API_KEY not set"
-              echo "Make sure adminbot-moltbook-key secret exists"
-              exit 1
-            fi
+          HTTP_CODE=$(curl -s -o /tmp/response.json -w '%{http_code}' -X POST \
+            "$MOLTBOOK_API/api/v1/agents/register" \
+            -H "Content-Type: application/json" \
+            -d @/agent/agent.json)
 
-            # Call rotation endpoint
-            RESPONSE=$(curl -s -X POST \
-              "$MOLTBOOK_API/api/v1/admin/agents/${AGENT_NAME}/rotate-key" \
-              -H "Authorization: Bearer $ADMIN_API_KEY" \
-              -H "Content-Type: application/json")
+          if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
+            # New registration — extract API key
+            API_KEY=$(cat /tmp/response.json | /tmp/jq -r '.agent.api_key')
+            echo "✅ Registered! API Key: ${API_KEY:0:20}..."
 
-            # Extract new API key
-            API_KEY=$(echo "$RESPONSE" | /tmp/jq -r '.api_key')
+          elif [ "$HTTP_CODE" = "409" ]; then
+            echo "ERROR: Agent ${AGENT_NAME} already registered."
+            echo "Re-run setup-agents.sh (it cleans up existing agents before registering)."
+            exit 1
 
-            if [ "$API_KEY" = "null" ] || [ -z "$API_KEY" ]; then
-              echo "ERROR: Failed to rotate API key"
-              SAFE_RESPONSE=$(echo "$RESPONSE" | sed 's/"api_key":"[^"]*"/"api_key":"[REDACTED]"/g')
-              echo "Response: $SAFE_RESPONSE"
-              exit 1
-            fi
-
-            echo "✅ Key rotated successfully! New key: ${API_KEY:0:20}..."
           else
-            echo "📝 Registering ${AGENT_NAME} with Moltbook..."
+            echo "ERROR: Registration failed (HTTP $HTTP_CODE)"
+            SAFE_RESPONSE=$(cat /tmp/response.json | sed 's/"api_key":"[^"]*"/"api_key":"[REDACTED]"/g')
+            echo "Response: $SAFE_RESPONSE"
+            exit 1
+          fi
 
-            RESPONSE=$(curl -s -X POST \
-              "$MOLTBOOK_API/api/v1/agents/register" \
-              -H "Content-Type: application/json" \
-              -d @/agent/agent.json)
-
-            # Extract API key from response
-            API_KEY=$(echo "$RESPONSE" | /tmp/jq -r '.agent.api_key')
-
-            if [ "$API_KEY" = "null" ] || [ -z "$API_KEY" ]; then
-              echo "ERROR: Failed to get API key from response"
-              # Redact credentials before logging
-              SAFE_RESPONSE=$(echo "$RESPONSE" | sed 's/"api_key":"[^"]*"/"api_key":"[REDACTED]"/g' | sed 's/moltbook_[A-Za-z0-9_-]*/[REDACTED]/g')
-              echo "Full response: $SAFE_RESPONSE"
-              exit 1
-            fi
-
-            echo "✅ Successfully registered! API Key: ${API_KEY:0:20}..."
+          if [ "$API_KEY" = "null" ] || [ -z "$API_KEY" ]; then
+            echo "ERROR: No API key in response"
+            exit 1
           fi
 
           # Create/update secret (same for both registration and rotation)
           echo "Updating Kubernetes secret..."
           oc create secret generic "$SECRET_NAME" \
-            -n openclaw \
+            -n sallyom-openclaw \
             --from-literal=api_key="$API_KEY" \
             --dry-run=client -o yaml | oc apply -f -
 
           echo "✅ Secret ${SECRET_NAME} updated!"
           echo "${AGENT_NAME} setup complete!"
-        env:
-        - name: ROTATE_KEY_ONLY
-          value: "false"  # Set to "true" to rotate instead of register
-        - name: ADMIN_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: audit-reporter-moltbook-key
-              key: api_key
-              optional: true  # Only required for rotation
         volumeMounts:
         - name: agent-config
           mountPath: /agent
@@ -116,36 +86,3 @@ spec:
         configMap:
           name: philbot-agent
       serviceAccountName: openclaw-agent-manager
----
-# ServiceAccount for agent registration jobs
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: openclaw-agent-manager
-  namespace: openclaw
----
-# Role to allow creating secrets
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: openclaw-agent-manager
-  namespace: openclaw
-rules:
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["create", "update", "patch", "get"]
----
-# RoleBinding
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: openclaw-agent-manager
-  namespace: openclaw
-subjects:
-- kind: ServiceAccount
-  name: openclaw-agent-manager
-  namespace: openclaw
-roleRef:
-  kind: Role
-  name: openclaw-agent-manager
-  apiGroup: rbac.authorization.k8s.io
