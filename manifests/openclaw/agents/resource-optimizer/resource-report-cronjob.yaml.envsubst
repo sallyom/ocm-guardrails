@@ -1,7 +1,11 @@
-# K8s CronJob that generates and posts resource reports to Moltbook.
-# Runs independently of the LLM — no model needed for the actual analysis.
-# The OpenClaw resource_optimizer agent can trigger this manually via curl,
-# or it runs on schedule automatically.
+# K8s CronJob that generates resource reports.
+# Runs independently of the LLM — no model needed for data collection.
+#
+# Flow:
+# 1. Queries K8s API for pods, deployments, PVCs in resource-demo namespace
+# 2. Builds a structured plain-text report
+# 3. Prints report to stdout (visible in job logs)
+# 4. Writes report to resource-report-latest ConfigMap (read by the agent)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -44,13 +48,6 @@ spec:
                 cpu: 200m
                 memory: 256Mi
             env:
-            - name: MOLTBOOK_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: resource-optimizer-moltbook-key
-                  key: api_key
-            - name: MOLTBOOK_API_URL
-              value: "http://moltbook-api.moltbook.svc.cluster.local:3000"
             - name: K8S_NAMESPACE
               value: "resource-demo"
             command:
@@ -73,67 +70,108 @@ spec:
               curl -s -H "Authorization: Bearer $TOKEN" --cacert "$CA" \
                 "$K8S_API/api/v1/namespaces/$NS/persistentvolumeclaims" > /tmp/pvcs.json
 
-              echo "Building report and posting to Moltbook..."
+              echo "Building resource report..."
 
               node -e "
               const fs = require('fs');
-              const { execSync } = require('child_process');
+              const https = require('https');
 
               const pods = JSON.parse(fs.readFileSync('/tmp/pods.json', 'utf8'));
               const deployments = JSON.parse(fs.readFileSync('/tmp/deployments.json', 'utf8'));
               const pvcs = JSON.parse(fs.readFileSync('/tmp/pvcs.json', 'utf8'));
-              const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+              const date = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
               const ns = process.env.K8S_NAMESPACE;
 
-              let report = 'Resource Optimization Report: ' + ns + ' - ' + date + '\n\n';
+              let report = 'Resource Report: ' + ns + '\n';
+              report += 'Generated: ' + date + '\n';
+              report += '='.repeat(60) + '\n\n';
 
-              report += '== Pods ==\n';
+              // Pods
+              report += '## Pods\n\n';
               const podItems = (pods.items || []);
-              if (podItems.length === 0) { report += '  (no pods found)\n'; }
+              if (podItems.length === 0) { report += '(no pods found)\n\n'; }
               podItems.forEach(p => {
                 const res = (p.spec.containers[0] || {}).resources || {};
                 const cpuReq = (res.requests || {}).cpu || 'none';
                 const memReq = (res.requests || {}).memory || 'none';
-                report += '  ' + p.metadata.name + ': phase=' + p.status.phase + ' cpu_req=' + cpuReq + ' mem_req=' + memReq + '\n';
+                const cpuLim = (res.limits || {}).cpu || 'none';
+                const memLim = (res.limits || {}).memory || 'none';
+                report += '- ' + p.metadata.name + '\n';
+                report += '  phase: ' + p.status.phase + '\n';
+                report += '  cpu: request=' + cpuReq + ' limit=' + cpuLim + '\n';
+                report += '  memory: request=' + memReq + ' limit=' + memLim + '\n';
               });
 
-              report += '\n== Deployments ==\n';
+              // Deployments
+              report += '\n## Deployments\n\n';
               const depItems = (deployments.items || []);
-              if (depItems.length === 0) { report += '  (no deployments found)\n'; }
+              if (depItems.length === 0) { report += '(no deployments found)\n\n'; }
               depItems.forEach(d => {
-                report += '  ' + d.metadata.name + ': replicas=' + d.spec.replicas + ' available=' + (d.status.availableReplicas || 0) + '\n';
+                const desired = d.spec.replicas;
+                const available = d.status.availableReplicas || 0;
+                const idle = desired === 0 ? ' [IDLE]' : '';
+                const mismatch = (desired > 0 && available < desired) ? ' [DEGRADED]' : '';
+                report += '- ' + d.metadata.name + ': ' + available + '/' + desired + ' replicas' + idle + mismatch + '\n';
               });
 
-              report += '\n== PVCs ==\n';
+              // PVCs
+              report += '\n## PVCs\n\n';
               const pvcItems = (pvcs.items || []);
-              if (pvcItems.length === 0) { report += '  (no PVCs found)\n'; }
-              pvcItems.forEach(v => {
-                report += '  ' + v.metadata.name + ': size=' + v.spec.resources.requests.storage + ' phase=' + v.status.phase + '\n';
+              if (pvcItems.length === 0) { report += '(no PVCs found)\n\n'; }
+
+              // Check which PVCs are mounted
+              const mountedPvcs = new Set();
+              podItems.forEach(p => {
+                (p.spec.volumes || []).forEach(v => {
+                  if (v.persistentVolumeClaim) mountedPvcs.add(v.persistentVolumeClaim.claimName);
+                });
               });
 
-              report += '\n== Summary ==\n';
-              report += 'Total pods: ' + podItems.length + '\n';
-              report += 'Total deployments: ' + depItems.length + '\n';
-              report += 'Total PVCs: ' + pvcItems.length + '\n';
-              report += '\n#cost #finops\n';
+              pvcItems.forEach(v => {
+                const attached = mountedPvcs.has(v.metadata.name) ? 'attached' : 'UNATTACHED';
+                report += '- ' + v.metadata.name + ': ' + v.spec.resources.requests.storage + ' (' + attached + ')\n';
+              });
 
+              // Summary
+              report += '\n## Summary\n\n';
+              const idleCount = depItems.filter(d => d.spec.replicas === 0).length;
+              const unattachedCount = pvcItems.filter(v => !mountedPvcs.has(v.metadata.name)).length;
+              report += 'Total pods: ' + podItems.length + '\n';
+              report += 'Total deployments: ' + depItems.length + ' (' + idleCount + ' idle)\n';
+              report += 'Total PVCs: ' + pvcItems.length + ' (' + unattachedCount + ' unattached)\n';
+
+              // Print to stdout
               console.log(report);
 
-              // Post to Moltbook
-              const title = 'Resource Report - ' + date;
-              const payload = JSON.stringify({
-                submolt: 'cost_resource_analysis',
-                title: title,
-                content: report
-              });
-              fs.writeFileSync('/tmp/payload.json', payload);
+              // Write to ConfigMap
+              const namespace = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace', 'utf8').trim();
+              const token = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token', 'utf8');
+              const ca = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/ca.crt');
 
-              const result = execSync(
-                'curl -s -X POST \"' + process.env.MOLTBOOK_API_URL + '/api/v1/posts\"' +
-                ' -H \"Authorization: Bearer ' + process.env.MOLTBOOK_API_KEY + '\"' +
-                ' -H \"Content-Type: application/json\"' +
-                ' -d @/tmp/payload.json',
-                { encoding: 'utf8' }
-              );
-              console.log('Moltbook response:', result);
+              const body = JSON.stringify({ data: { 'report.txt': report } });
+
+              const req = https.request({
+                hostname: 'kubernetes.default.svc',
+                path: '/api/v1/namespaces/' + namespace + '/configmaps/resource-report-latest',
+                method: 'PATCH',
+                ca: ca,
+                headers: {
+                  'Authorization': 'Bearer ' + token,
+                  'Content-Type': 'application/strategic-merge-patch+json',
+                  'Content-Length': Buffer.byteLength(body)
+                }
+              }, (res) => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                  if (res.statusCode === 200) {
+                    console.log('ConfigMap resource-report-latest updated successfully');
+                  } else {
+                    console.error('ConfigMap update failed (HTTP ' + res.statusCode + '): ' + data);
+                  }
+                });
+              });
+              req.on('error', (e) => { console.error('ConfigMap update error: ' + e.message); });
+              req.write(body);
+              req.end();
               "

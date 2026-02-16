@@ -28,7 +28,7 @@ data:
       },
       "gateway": {
         "mode": "local",
-        "bind": "lan",
+        "bind": "loopback",
         "port": 18789,
         "trustedProxies": ["10.128.0.0/14"],
         "auth": {

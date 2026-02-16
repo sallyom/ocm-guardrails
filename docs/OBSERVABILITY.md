@@ -1,6 +1,5 @@
 # Observability with OpenTelemetry and MLflow
 
-This guide documents the production observability setup for OpenClaw and Moltbook using OpenTelemetry collector sidecars and MLflow Tracking.
 
 ## Architecture Overview
 
@@ -40,7 +39,6 @@ The observability stack uses **sidecar-based OTEL collectors** that send traces 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The same pattern applies to Moltbook pods in the `moltbook` namespace.
 
 ## Why Sidecars?
 
@@ -165,19 +163,14 @@ spec:
 - Uses in-cluster service URL (`mlflow-service.mlflow.svc:5000`) — avoids DNS rebinding rejection from MLflow's `HostValidationMiddleware` when going through the external route
 - Path `/v1/traces` is auto-appended by the OTLP exporter
 - Custom headers for MLflow experiment/workspace routing
+### 3. vLLM OTEL Collector Sidecar (Optional)
 
-### 3. Moltbook API (moltbook namespace)
-
-**Same sidecar pattern** as OpenClaw.
-
-**Configuration** (`observability/moltbook-otel-sidecar.yaml`):
+**Same sidecar pattern** as OpenClaw, deployed in the vLLM namespace.
 
 ```yaml
 apiVersion: opentelemetry.io/v1alpha1
 kind: OpenTelemetryCollector
 metadata:
-  name: moltbook-sidecar
-  namespace: moltbook
 spec:
   mode: sidecar
 
@@ -204,7 +197,6 @@ spec:
       resource:
         attributes:
           - key: service.namespace
-            value: moltbook
             action: upsert
           - key: mlflow.experimentName
             value: OpenClaw
@@ -215,7 +207,6 @@ spec:
         endpoint: http://mlflow-service.mlflow.svc.cluster.local:5000
         headers:
           x-mlflow-experiment-id: "4"
-          x-mlflow-workspace: "moltbook"
         tls:
           insecure: true
 
@@ -263,12 +254,10 @@ This repository includes three OTEL collector sidecar configurations:
 | Sidecar | Namespace | Purpose | Sampling | Batch Size | Exports To |
 |---------|-----------|---------|----------|------------|------------|
 | `openclaw-sidecar` | `${OPENCLAW_NAMESPACE}` | OpenClaw agent traces | 100% | 100 | MLflow Experiment 4 |
-| `moltbook-sidecar` | `moltbook` | Moltbook API traces | 10% | 1024 | MLflow Experiment 4 |
 | `vllm-sidecar` | `demo-mlflow-agent-tracing` | vLLM inference traces (dual-export) | 100% | 100 | MLflow Experiments 2 & 4 |
 
 **Key differences:**
 - **OpenClaw**: Full sampling, optimized for LLM agent tracing with MLflow-specific attributes
-- **Moltbook**: 10% sampling to reduce high-volume API trace data
 - **vLLM**: Dual-pipeline export - Experiment 2 for direct vLLM calls, Experiment 4 for OpenClaw-initiated traces
 
 ### Prerequisites
@@ -277,7 +266,6 @@ This repository includes three OTEL collector sidecar configurations:
 
 2. **MLflow** with OTLP endpoint accessible
 
-3. **Network connectivity** from openclaw/moltbook namespaces to MLflow service (`mlflow-service.mlflow.svc.cluster.local:5000`)
 
 ### Deploy OTEL Collector Sidecars
 
@@ -291,7 +279,6 @@ The setup script automatically runs `envsubst` on sidecar templates and deploys 
 ./scripts/setup.sh
 # Generates from .envsubst templates:
 # - observability/openclaw-otel-sidecar.yaml
-# - observability/moltbook-otel-sidecar.yaml
 # - observability/vllm-otel-sidecar.yaml
 ```
 
@@ -311,7 +298,6 @@ done
 
 # Deploy each sidecar configuration
 oc apply -f observability/openclaw-otel-sidecar.yaml
-oc apply -f observability/moltbook-otel-sidecar.yaml
 oc apply -f observability/vllm-otel-sidecar.yaml
 ```
 
@@ -321,8 +307,6 @@ oc apply -f observability/vllm-otel-sidecar.yaml
 # Check OpenClaw sidecar config
 oc get opentelemetrycollector openclaw-sidecar -n openclaw
 
-# Check Moltbook sidecar config
-oc get opentelemetrycollector moltbook-sidecar -n moltbook
 
 # Check vLLM sidecar config
 oc get opentelemetrycollector vllm-sidecar -n demo-mlflow-agent-tracing
@@ -360,34 +344,6 @@ oc apply -k manifests/openclaw/overlays/openshift/
 oc rollout restart deployment/openclaw -n openclaw
 ```
 
-#### Moltbook API Deployment
-
-Edit `manifests/moltbook/base/moltbook-api-deployment.yaml`:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: moltbook-api
-  namespace: moltbook
-spec:
-  template:
-    metadata:
-      annotations:
-        # This triggers automatic sidecar injection
-        sidecar.opentelemetry.io/inject: "moltbook-sidecar"
-    spec:
-      containers:
-      - name: api
-        # ... rest of container spec
-```
-
-Then apply the change:
-```bash
-oc apply -k manifests/moltbook/overlays/openshift/
-oc rollout restart deployment/moltbook-api -n moltbook
-```
-
 #### vLLM Deployment (Optional)
 
 For vLLM deployments that need dual-export to multiple MLflow experiments:
@@ -418,12 +374,9 @@ After restarting the deployments, verify the sidecar was injected:
 # OpenClaw - should show 2 containers (gateway + otc-container)
 oc get pods -n openclaw -l app=openclaw -o jsonpath='{.items[0].spec.containers[*].name}'
 
-# Moltbook - should show 2 containers (api + otc-container)
-oc get pods -n moltbook -l app=moltbook-api -o jsonpath='{.items[0].spec.containers[*].name}'
 
 # Check sidecar logs
 oc logs -n openclaw -l app=openclaw -c otc-container
-oc logs -n moltbook -l app=moltbook-api -c otc-container
 ```
 
 ### Update Cluster-Specific Values
@@ -448,7 +401,6 @@ done
 
 # Then deploy
 oc apply -f observability/openclaw-otel-sidecar.yaml
-oc apply -f observability/moltbook-otel-sidecar.yaml
 oc apply -f observability/vllm-otel-sidecar.yaml
 ```
 
@@ -457,7 +409,6 @@ oc apply -f observability/vllm-otel-sidecar.yaml
 1. Access MLflow UI via route: `https://mlflow-route-mlflow.apps.YOUR_CLUSTER_DOMAIN`
    - Or port-forward: `oc port-forward svc/mlflow-service 5000:5000 -n mlflow`
 2. Navigate to **Traces** tab
-3. Filter by workspace: `openclaw` or `moltbook`
 4. Click a trace to see:
    - Request/Response columns populated
    - Nested span hierarchy (message.process → llm → tool spans)
@@ -494,7 +445,6 @@ batch:
 
 ### Sampling
 
-**Reduce trace volume** (Moltbook example):
 ```yaml
 probabilistic_sampler:
   sampling_percentage: 10.0  # Sample 10% of traces
@@ -525,7 +475,6 @@ headers:
 
 OpenClaw now supports **W3C Trace Context** propagation to downstream services, enabling end-to-end distributed tracing across:
 - **OpenClaw → vLLM**: See LLM inference as nested spans under agent traces
-- **OpenClaw → Moltbook**: See API calls as nested spans (when Moltbook has OTLP instrumentation)
 - **OpenClaw → Any OTLP-instrumented service**: Full request path visibility
 
 ### How It Works
@@ -626,7 +575,6 @@ oc logs deployment/mlflow-deployment -n mlflow | grep "Rejected request"
 **Problem:** MLflow UI shows warnings about high cardinality attributes
 
 **Solution:**
-1. Enable sampling for high-volume services (like Moltbook):
    ```yaml
    processors:
      probabilistic_sampler:

@@ -2,7 +2,6 @@
 # ============================================================================
 # KIND CLUSTER BOOTSTRAP SCRIPT
 # ============================================================================
-# Creates a Kind cluster pre-configured for OpenClaw + Moltbook local dev.
 #
 # Usage:
 #   ./scripts/create-cluster.sh                    # Create with auto-detected engine
@@ -37,7 +36,6 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Create or delete a Kind cluster for local OpenClaw + Moltbook development.
 
 Options:
   --name NAME          Cluster name (default: openclaw)
@@ -187,7 +185,6 @@ echo "---------------------------------------------------------------"
 echo ""
 echo "  kubectl cluster-info --context kind-$CLUSTER_NAME"
 echo ""
-echo "Next step — deploy OpenClaw + Moltbook:"
 echo ""
 echo "  ./scripts/setup.sh --k8s"
 echo ""

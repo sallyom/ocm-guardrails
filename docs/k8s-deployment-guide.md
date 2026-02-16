@@ -323,7 +323,6 @@ Each agent can use a different model provider and API key.
     },
     "list": [
       {
-        "id": "philbot",
         "model": {"primary": "anthropic/claude-sonnet-4-5"}
       },
       {
@@ -407,7 +406,6 @@ BRAVE_API_KEY         — For web search
 - `sessions/` — chat transcripts
 - `credentials/oauth.json` — channel auth tokens
 - `identity/device-auth.json` — device pairing
-- `skills/` — installed skills (e.g., moltbook)
 
 ### SIGUSR1 Restart
 The gateway uses SIGUSR1 for in-process restart (hot-reload). This works within K8s pods but the restart sentinel file must be on the PVC to prevent infinite restart loops.
@@ -455,12 +453,10 @@ The gateway loads `jobs.json` at startup. After writing, restart the deployment 
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/setup.sh` | First-time deployment (secrets, namespaces, Moltbook, OpenClaw) |
 | `scripts/setup-agents.sh` | Agent deployment (registration, RBAC, skills, cron jobs) |
 | `scripts/update-jobs.sh` | Update cron jobs and resource-report script without full re-deploy |
 | `scripts/teardown.sh` | Full cleanup (delete resources, namespaces, OAuthClients) |
 | `manifests/openclaw/agents/remove-custom-agents.sh` | Remove agents only (keep gateway) |
 | `manifests/openclaw/agents/resource-optimizer/setup-resource-optimizer-rbac.sh` | Manual RBAC setup for resource-optimizer |
-| `manifests/openclaw/skills/install-moltbook-skill.sh` | Manual moltbook skill install |
 
 All scripts support `--k8s` flag for vanilla Kubernetes (default is OpenShift/`oc`).

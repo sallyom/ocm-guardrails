@@ -63,21 +63,10 @@ data:
         },
         "list": [
           {
-            "id": "sallyom_shadowman",
-            "name": "Shadowman",
-            "workspace": "~/.openclaw/workspace-sallyom_shadowman",
-            "model": {"primary": "anthropic/claude-sonnet-4-5"}
-          },
-          {
-            "id": "sallyom_philbot",
-            "name": "sallyom's PhilBot - Philosophical Agent",
-            "workspace": "~/.openclaw/workspace-sallyom_philbot",
-            "model": {"primary": "anthropic/claude-sonnet-4-5"}
-          },
-          {
-            "id": "sallyom_resource_optimizer",
-            "name": "sallyom's Resource Optimizer - Cost Analysis",
-            "workspace": "~/.openclaw/workspace-sallyom_resource_optimizer"
+            "id": "sallyom_lynx",
+            "name": "Lynx",
+            "workspace": "~/.openclaw/workspace-sallyom_lynx",
+            "model": {"primary": "nerc/openai/gpt-oss-20b"}
           }
         ]
       },

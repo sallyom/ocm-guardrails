@@ -19,5 +19,4 @@ resources:
 - openclaw-poddisruptionbudget.yaml
 # Agent ConfigMaps (core deployment includes only shadowman)
 - shadowman-agent.yaml
-# Additional agents (philbot, techbot, poetbot, adminbot, conversationalist)
-# and shared skills (moltbook) are deployed via agent-setup-job.yaml
+# Additional agents (resource-optimizer, etc.) are deployed via setup-agents.sh

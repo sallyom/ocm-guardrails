@@ -107,3 +107,45 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: resource-demo-reader
+
+---
+# Role: resource-report-writer
+# Allows the CronJob to update the resource-report-latest ConfigMap
+# in the openclaw namespace (separate from the read-only resource-demo access above)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resource-report-writer
+  namespace: ${OPENCLAW_NAMESPACE}
+  labels:
+    app: openclaw
+    agent: resource-optimizer
+rules:
+- apiGroups: [""]
+  resources:
+    - configmaps
+  resourceNames:
+    - resource-report-latest
+  verbs:
+    - get
+    - update
+    - patch
+
+---
+# RoleBinding: Grant resource-optimizer-sa permission to write the report ConfigMap
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resource-report-writer-binding
+  namespace: ${OPENCLAW_NAMESPACE}
+  labels:
+    app: openclaw
+    agent: resource-optimizer
+subjects:
+- kind: ServiceAccount
+  name: resource-optimizer-sa
+  namespace: ${OPENCLAW_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resource-report-writer

@@ -2,18 +2,16 @@
 # ============================================================================
 # FIRST-TIME DEPLOYMENT SCRIPT
 # ============================================================================
-# Use this for complete deployment of OpenClaw + Moltbook + Agents
+# Use this for complete deployment of OpenClaw + Agents
 #
 # Usage:
 #   ./setup.sh                    # Deploy to OpenShift (default)
 #   ./setup.sh --k8s              # Deploy to vanilla Kubernetes (minikube, kind, etc.)
-#   ./setup.sh --skip-moltbook    # Deploy OpenClaw only (no Moltbook)
 #
 # This script:
-#   - Generates all secrets (gateway, OAuth, JWT, PostgreSQL) into .env
+#   - Generates all secrets (gateway, OAuth) into .env
 #   - Runs envsubst on committed .envsubst templates to produce deployment YAML
-#   - Creates namespaces (openclaw, moltbook)
-#   - Deploys Moltbook (PostgreSQL, Redis, API, frontend)
+#   - Creates namespace (openclaw)
 #   - Deploys OpenClaw gateway with security hardening:
 #       * NetworkPolicy (network isolation)
 #       * ResourceQuota (namespace limits: 4 CPU, 8Gi RAM)
@@ -23,7 +21,7 @@
 #       * Device authentication enabled
 #       * Non-root containers with dropped capabilities
 #   - Optionally deploys AI agents with RBAC
-#   - Sets up cron jobs for autonomous posting
+#   - Sets up cron jobs for autonomous tasks
 #
 # IMPORTANT:
 #   - .envsubst templates are committed to Git (contain ${VAR} placeholders)
@@ -38,11 +36,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Parse flags
 K8S_MODE=false
-SKIP_MOLTBOOK=false
 for arg in "$@"; do
   case "$arg" in
     --k8s) K8S_MODE=true ;;
-    --skip-moltbook) SKIP_MOLTBOOK=true ;;
   esac
 done
 
@@ -96,15 +92,10 @@ generate_cookie_secret() {
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
-if $SKIP_MOLTBOOK; then
-echo "║  OpenClaw Deployment Setup (OpenClaw only)               ║"
-elif $K8S_MODE; then
-echo "║  OpenClaw + Moltbook Deployment Setup (Kubernetes mode)   ║"
+if $K8S_MODE; then
+echo "║  OpenClaw Deployment Setup (Kubernetes mode)               ║"
 else
-echo "║  OpenClaw + Moltbook Deployment Setup (OpenShift mode)    ║"
-fi
-if ! $SKIP_MOLTBOOK; then
-echo "║  Safe-For-Work AI Agent Social Network                    ║"
+echo "║  OpenClaw Deployment Setup (OpenShift mode)                ║"
 fi
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
@@ -160,7 +151,6 @@ fi
 # Prompt for OpenClaw namespace prefix (required)
 log_info "OpenClaw namespace (each team member gets their own):"
 log_info "  Format: <prefix>-openclaw (e.g., sally-openclaw, bob-openclaw)"
-log_info "  Agents will be named <prefix>_philbot, etc. for uniqueness in Moltbook"
 echo ""
 while true; do
   read -p "  Enter your prefix: " OPENCLAW_PREFIX
@@ -175,11 +165,7 @@ log_success "OpenClaw namespace: $OPENCLAW_NAMESPACE"
 echo ""
 
 # Confirm deployment
-if $SKIP_MOLTBOOK; then
-  log_warn "This will deploy OpenClaw only to namespace: $OPENCLAW_NAMESPACE"
-else
-  log_warn "This will deploy to namespaces: $OPENCLAW_NAMESPACE, moltbook"
-fi
+log_warn "This will deploy OpenClaw to namespace: $OPENCLAW_NAMESPACE"
 read -p "Continue? (y/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -202,13 +188,6 @@ if [ -f "$REPO_ROOT/.env" ]; then
   OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
   OPENCLAW_OAUTH_CLIENT_SECRET="${OPENCLAW_OAUTH_CLIENT_SECRET:-}"
   OPENCLAW_OAUTH_COOKIE_SECRET="${OPENCLAW_OAUTH_COOKIE_SECRET:-}"
-  JWT_SECRET="${JWT_SECRET:-}"
-  ADMIN_API_KEY="${ADMIN_API_KEY:-}"
-  POSTGRES_DB="${POSTGRES_DB:-}"
-  POSTGRES_USER="${POSTGRES_USER:-}"
-  POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
-  MOLTBOOK_OAUTH_CLIENT_SECRET="${MOLTBOOK_OAUTH_CLIENT_SECRET:-}"
-  MOLTBOOK_OAUTH_COOKIE_SECRET="${MOLTBOOK_OAUTH_COOKIE_SECRET:-}"
   ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
   MODEL_ENDPOINT="${MODEL_ENDPOINT:-}"
   VERTEX_ENABLED="${VERTEX_ENABLED:-false}"
@@ -229,56 +208,17 @@ else
 
   OPENCLAW_GATEWAY_TOKEN=$(generate_secret)
 
-  if $SKIP_MOLTBOOK; then
-    # OpenClaw-only: no Moltbook secrets needed
-    JWT_SECRET=""
-    ADMIN_API_KEY=""
-    POSTGRES_DB=""
-    POSTGRES_USER=""
-    POSTGRES_PASSWORD=""
-    MOLTBOOK_OAUTH_CLIENT_SECRET=""
-    MOLTBOOK_OAUTH_COOKIE_SECRET=""
-  else
-    JWT_SECRET=$(generate_secret)
-    ADMIN_API_KEY="moltbook_$(openssl rand -hex 32)"
-  fi
-
   if $K8S_MODE; then
     # K8s mode: no OAuth proxy, skip OAuth secrets
     OPENCLAW_OAUTH_CLIENT_SECRET=""
     OPENCLAW_OAUTH_COOKIE_SECRET=""
-    if ! $SKIP_MOLTBOOK; then
-      MOLTBOOK_OAUTH_CLIENT_SECRET=""
-      MOLTBOOK_OAUTH_COOKIE_SECRET=""
-    fi
   else
     OPENCLAW_OAUTH_CLIENT_SECRET=$(generate_secret)
     OPENCLAW_OAUTH_COOKIE_SECRET=$(generate_cookie_secret)  # Must be 32 bytes for oauth-proxy
-    if ! $SKIP_MOLTBOOK; then
-      MOLTBOOK_OAUTH_CLIENT_SECRET=$(generate_secret)
-      MOLTBOOK_OAUTH_COOKIE_SECRET=$(generate_cookie_secret)  # Must be 32 bytes for oauth-proxy
-    fi
   fi
 
   log_success "Secrets generated"
   echo ""
-
-  if ! $SKIP_MOLTBOOK; then
-    # Prompt for PostgreSQL credentials
-    log_info "PostgreSQL credentials (or press Enter for defaults):"
-    read -p "  Database name [moltbook]: " POSTGRES_DB
-    POSTGRES_DB=${POSTGRES_DB:-moltbook}
-
-    read -p "  Username [moltbook]: " POSTGRES_USER
-    POSTGRES_USER=${POSTGRES_USER:-moltbook}
-
-    read -p "  Password (leave empty to generate): " POSTGRES_PASSWORD
-    if [ -z "$POSTGRES_PASSWORD" ]; then
-      POSTGRES_PASSWORD=$(generate_secret)
-      echo "    → Generated: $POSTGRES_PASSWORD"
-    fi
-    echo ""
-  fi
 
   # Prompt for Anthropic API key (optional — for agents that use Anthropic models)
   log_info "Anthropic API key (optional, for agents using Claude models):"
@@ -348,13 +288,6 @@ OPENCLAW_NAMESPACE=$OPENCLAW_NAMESPACE
 OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_GATEWAY_TOKEN
 OPENCLAW_OAUTH_CLIENT_SECRET=$OPENCLAW_OAUTH_CLIENT_SECRET
 OPENCLAW_OAUTH_COOKIE_SECRET=$OPENCLAW_OAUTH_COOKIE_SECRET
-JWT_SECRET=$JWT_SECRET
-ADMIN_API_KEY=$ADMIN_API_KEY
-POSTGRES_DB=$POSTGRES_DB
-POSTGRES_USER=$POSTGRES_USER
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-MOLTBOOK_OAUTH_CLIENT_SECRET=$MOLTBOOK_OAUTH_CLIENT_SECRET
-MOLTBOOK_OAUTH_COOKIE_SECRET=$MOLTBOOK_OAUTH_COOKIE_SECRET
 ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 MODEL_ENDPOINT=$MODEL_ENDPOINT
 VERTEX_ENABLED=$VERTEX_ENABLED
@@ -396,7 +329,7 @@ else
 fi
 
 # Explicit variable list to protect {agentId} and other non-env placeholders
-ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${JWT_SECRET} ${ADMIN_API_KEY} ${POSTGRES_DB} ${POSTGRES_USER} ${POSTGRES_PASSWORD} ${MOLTBOOK_OAUTH_CLIENT_SECRET} ${MOLTBOOK_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME} ${MODEL_ENDPOINT} ${DEFAULT_AGENT_MODEL} ${GOOGLE_CLOUD_PROJECT} ${GOOGLE_CLOUD_LOCATION}'
+ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME} ${MODEL_ENDPOINT} ${DEFAULT_AGENT_MODEL} ${GOOGLE_CLOUD_PROJECT} ${GOOGLE_CLOUD_LOCATION}'
 
 for tpl in $(find "$REPO_ROOT/manifests" "$REPO_ROOT/observability" -name '*.envsubst'); do
   yaml="${tpl%.envsubst}"
@@ -408,22 +341,14 @@ echo ""
 # Select overlay based on mode
 if $K8S_MODE; then
   OPENCLAW_OVERLAY="$REPO_ROOT/manifests/openclaw/overlays/k8s"
-  MOLTBOOK_OVERLAY="$REPO_ROOT/manifests/moltbook/overlays/k8s"
 else
   OPENCLAW_OVERLAY="$REPO_ROOT/manifests/openclaw/overlays/openshift"
-  MOLTBOOK_OVERLAY="$REPO_ROOT/manifests/moltbook/overlays/openshift"
 fi
-# MOLTBOOK_OVERLAY is unused when --skip-moltbook is set, but kept for envsubst templates
 
-# Create namespaces
-log_info "Creating namespaces..."
+# Create namespace
+log_info "Creating namespace..."
 $KUBECTL create namespace "$OPENCLAW_NAMESPACE" --dry-run=client -o yaml | $KUBECTL apply -f - > /dev/null
-if ! $SKIP_MOLTBOOK; then
-  $KUBECTL create namespace moltbook --dry-run=client -o yaml | $KUBECTL apply -f - > /dev/null
-  log_success "Namespaces created: $OPENCLAW_NAMESPACE, moltbook"
-else
-  log_success "Namespace created: $OPENCLAW_NAMESPACE"
-fi
+log_success "Namespace created: $OPENCLAW_NAMESPACE"
 echo ""
 
 # Create Vertex AI credentials secret (if enabled)
@@ -437,24 +362,12 @@ if [ "${VERTEX_ENABLED:-}" = "true" ] && [ -n "${VERTEX_SA_JSON_PATH:-}" ] && [ 
   echo ""
 fi
 
-if ! $SKIP_MOLTBOOK; then
-  # Deploy OTEL collector for Moltbook (OpenClaw uses MLflow directly)
-  log_info "Deploying OpenTelemetry collector for Moltbook..."
-  if [ -f "$REPO_ROOT/observability/moltbook-otel-collector.yaml" ]; then
-    $KUBECTL apply -f "$REPO_ROOT/observability/moltbook-otel-collector.yaml"
-    log_success "Moltbook OTEL collector deployed"
-  else
-    log_warn "Moltbook OTEL collector config not found (optional)"
-  fi
-  echo ""
-fi
-
 if $K8S_MODE; then
   log_info "Skipping OAuthClient creation (not needed in Kubernetes mode)"
   echo ""
 else
   # Deploy OAuthClients separately (cluster-scoped, can't go through Kustomize namespace transformer)
-  log_info "Creating OAuthClients (requires cluster-admin)..."
+  log_info "Creating OAuthClient (requires cluster-admin)..."
 
   # OpenClaw OAuthClient
   if oc apply -f "$OPENCLAW_OVERLAY/oauthclient.yaml" 2>/dev/null; then
@@ -464,25 +377,6 @@ else
     log_warn "Ask your cluster admin to run:"
     echo "    oc apply -f $OPENCLAW_OVERLAY/oauthclient.yaml"
   fi
-
-  if ! $SKIP_MOLTBOOK; then
-    # Moltbook OAuthClient
-    if oc apply -f "$MOLTBOOK_OVERLAY/oauthclient.yaml" 2>/dev/null; then
-      log_success "Moltbook OAuthClient created"
-    else
-      log_warn "Could not create Moltbook OAuthClient (requires cluster-admin permissions)"
-      log_warn "Ask your cluster admin to run:"
-      echo "    oc apply -f $MOLTBOOK_OVERLAY/oauthclient.yaml"
-    fi
-  fi
-  echo ""
-fi
-
-if ! $SKIP_MOLTBOOK; then
-  # Deploy Moltbook
-  log_info "Deploying Moltbook with Guardrails..."
-  $KUBECTL apply -k "$MOLTBOOK_OVERLAY"
-  log_success "Moltbook deployed"
   echo ""
 fi
 
@@ -506,17 +400,9 @@ echo ""
 if $K8S_MODE; then
   echo "Access (use port-forward):"
   echo "  kubectl port-forward svc/openclaw 18789:18789 -n $OPENCLAW_NAMESPACE"
-  if ! $SKIP_MOLTBOOK; then
-    echo "  kubectl port-forward svc/moltbook-frontend 8080:8080 -n moltbook"
-    echo "  kubectl port-forward svc/moltbook-api 3000:3000 -n moltbook"
-  fi
   echo ""
   echo "Then open:"
   echo "  OpenClaw Gateway:    http://localhost:18789"
-  if ! $SKIP_MOLTBOOK; then
-    echo "  Moltbook Frontend:   http://localhost:8080"
-    echo "  Moltbook API:        http://localhost:3000"
-  fi
   echo ""
 else
   # Get routes
@@ -525,40 +411,18 @@ else
 
   echo "Access URLs:"
   echo "  OpenClaw Gateway:          https://${OPENCLAW_ROUTE}"
-  if ! $SKIP_MOLTBOOK; then
-    MOLTBOOK_FRONTEND_ROUTE=$(oc get route moltbook-frontend -n moltbook -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
-    MOLTBOOK_API_ROUTE=$(oc get route moltbook-api -n moltbook -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
-    echo "  Moltbook Frontend (OAuth): https://${MOLTBOOK_FRONTEND_ROUTE}"
-    echo "  Moltbook API (public):     https://${MOLTBOOK_API_ROUTE}"
-  fi
   echo ""
 fi
 
 echo "Credentials:"
 echo "  OpenClaw Gateway Token: $OPENCLAW_GATEWAY_TOKEN"
-if ! $SKIP_MOLTBOOK; then
-  echo "  Moltbook Admin API Key: $ADMIN_API_KEY"
-  echo "  PostgreSQL:"
-  echo "    Database: $POSTGRES_DB"
-  echo "    User:     $POSTGRES_USER"
-  echo "    Password: $POSTGRES_PASSWORD"
-fi
 echo ""
 
-if $SKIP_MOLTBOOK; then
-  echo "Next steps:"
-  echo "  1. Wait for OpenClaw to be ready:"
-  echo "     $KUBECTL rollout status deployment/openclaw -n $OPENCLAW_NAMESPACE --timeout=600s"
-  echo ""
-  echo "  To add Moltbook later, re-run without --skip-moltbook:"
-  echo "     scripts/setup.sh$(if $K8S_MODE; then echo ' --k8s'; fi)"
-else
-  echo "Next steps — deploy AI agents:"
-  echo "  1. Wait for OpenClaw to be ready:"
-  echo "     $KUBECTL rollout status deployment/openclaw -n $OPENCLAW_NAMESPACE --timeout=600s"
-  echo "  2. Run the agent setup script:"
-  echo "     scripts/setup-agents.sh$(if $K8S_MODE; then echo ' --k8s'; fi)"
-fi
+echo "Next steps — deploy AI agents:"
+echo "  1. Wait for OpenClaw to be ready:"
+echo "     $KUBECTL rollout status deployment/openclaw -n $OPENCLAW_NAMESPACE --timeout=600s"
+echo "  2. Run the agent setup script:"
+echo "     scripts/setup-agents.sh$(if $K8S_MODE; then echo ' --k8s'; fi)"
 echo ""
 
 log_success "Setup complete!"

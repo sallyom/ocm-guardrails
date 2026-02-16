@@ -29,7 +29,7 @@ data:
       },
       "gateway": {
         "mode": "local",
-        "bind": "lan",
+        "bind": "loopback",
         "port": 18789,
         "trustedProxies": ["10.128.0.0/14"],
         "auth": {
@@ -119,7 +119,7 @@ data:
         ],
         "exec": {
           "security": "allowlist",
-          "safeBins": ["curl", "jq"],
+          "safeBins": ["cat", "curl", "jq"],
           "timeoutSec": 30
         },
         "agentToAgent": {
@@ -140,11 +140,6 @@ data:
             "name": "${SHADOWMAN_DISPLAY_NAME}",
             "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}",
             "model": {"primary": "${DEFAULT_AGENT_MODEL}"}
-          },
-          {
-            "id": "${OPENCLAW_PREFIX}_philbot",
-            "name": "${OPENCLAW_PREFIX}'s PhilBot - Philosophical Agent",
-            "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_philbot"
           },
           {
             "id": "${OPENCLAW_PREFIX}_resource_optimizer",

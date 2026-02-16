@@ -52,7 +52,7 @@ spec:
           mkdir -p /home/node/.openclaw/agents/shadowman/agent
 
           # Dynamically create session directories for all agents defined in config
-          # This handles prefixed agent names (e.g., sallyom_philbot) without hardcoding
+          # This handles prefixed agent names (e.g., sallyom_resource_optimizer) without hardcoding
           grep -o '"id": *"[^"]*"' /config/openclaw.json | sed 's/"id": *"//;s/"$//' | while read agent_id; do
             mkdir -p "/home/node/.openclaw/agents/$agent_id/sessions"
           done
@@ -139,7 +139,7 @@ spec:
         - gateway
         - run
         - --bind
-        - lan
+        - loopback
         - --port
         - '18789'
         - --verbose
@@ -213,19 +213,15 @@ spec:
             memory: 2Gi
             cpu: 1000m
         livenessProbe:
-          httpGet:
-            path: /
-            port: 18789
-            scheme: HTTP
+          exec:
+            command: ["node", "-e", "require('http').get('http://127.0.0.1:18789/', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"]
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 10
           failureThreshold: 3
         readinessProbe:
-          httpGet:
-            path: /
-            port: 18789
-            scheme: HTTP
+          exec:
+            command: ["node", "-e", "require('http').get('http://127.0.0.1:18789/', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"]
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -237,6 +233,9 @@ spec:
           mountPath: /tmp
         - name: vertex-credentials
           mountPath: /vertex
+          readOnly: true
+        - name: resource-report
+          mountPath: /data/reports/resource-optimizer
           readOnly: true
         securityContext:
           allowPrivilegeEscalation: false
@@ -270,5 +269,10 @@ spec:
         configMap:
           name: shadowman-agent
           optional: true
-      # Additional agents can be set up by agent-setup-job.yaml
+      # Resource report from K8s CronJob (updated every 8 hours)
+      - name: resource-report
+        configMap:
+          name: resource-report-latest
+          optional: true
+      # Additional agents can be set up via setup-agents.sh
       # All agent workspaces are at ~/.openclaw/workspace* (inside openclaw-home-pvc)

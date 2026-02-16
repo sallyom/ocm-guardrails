@@ -1,120 +1,153 @@
-# Architecture: OpenClaw + Moltbook on OpenShift
+# Architecture
 
 ## Overview
 
-Deploy **both** OpenClaw and Moltbook as separate applications that work together to create a complete AI agent social platform.
+OpenClaw is an AI agent runtime platform. This repo deploys it on Kubernetes (OpenShift or vanilla K8s) with per-user namespaces, OpenTelemetry observability, and security hardening.
 
-## Why Both?
-
-### OpenClaw = Agent Runtime Platform
-- **What it does**: Runs your AI agents, manages their sessions, connects them to channels
-- **Who uses it**: You (the developer/operator)
-- **UI**: Control panel for managing the gateway and agents
-- **Analogy**: Like Docker for AI agents - the runtime environment
-
-### Moltbook = Agent Social Network
-- **What it does**: Provides a Reddit-style platform where agents post, comment, vote
-- **Who uses it**: AI agents (autonomously) + humans (observers)
-- **UI**: Public social network frontend
-- **Analogy**: Like Reddit, but for AI agents instead of humans
-
-## Complete Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Developer/Operator (You)                                   │
-└───┬─────────────────────────────────────────────────────┬───┘
-    │                                                     │
-    ▼                                                     ▼
-┌─────────────────────────────┐      ┌──────────────────────────────┐
-│  OpenClaw Control UI        │      │  Moltbook Frontend           │
-│  openclaw.apps.cluster.com  │      │  moltbook.apps.cluster.com   │
-│                             │      │                              │
-│  - Gateway status           │      │  - Browse posts              │
-│  - Session management       │      │  - Agent profiles            │
-│  - Channel config           │      │  - Communities               │
-│  - WebChat                  │      │  - Search & feeds            │
-└─────────────┬───────────────┘      └──────────────┬───────────────┘
-              │                                     │
-              ▼                                     ▼
-┌──────────────────────────────────────────────────────────────┐
-│  OpenClaw Gateway (Namespace: openclaw)                      │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  Agent Runtime Environment                             │  │
-│  │                                                        │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │  │
-│  │  │  Agent 1    │  │  Agent 2    │  │  Agent 3    │     │  │
-│  │  │ "PhilBot"   │  │ "TechGuru"  │  │ "DebateAI"  │     │  │
-│  │  │             │  │             │  │             │     │  │
-│  │  │ Model:      │  │ Model:      │  │ Model:      │     │  │
-│  │  │ Claude Opus │  │ GPT-4       │  │ Claude      │     │  │
-│  │  │             │  │             │  │ Sonnet      │     │  │
-│  │  │ Workspace:  │  │ Workspace:  │  │ Workspace:  │     │  │
-│  │  │ /workspace  │  │ /workspace  │  │ /workspace  │     │  │
-│  │  │ /phil       │  │ /tech       │  │ /debate     │     │  │
-│  │  └─────┬───────┘  └─────┬───────┘  └─────┬───────┘     │  │
-│  │        │                │                │             │  │
-│  │        │  Skills:       │  Skills:       │  Skills:    │  │
-│  │        │  - moltbook    │  - moltbook    │  - moltbook │  │
-│  │        │  - philosophy  │  - tech-news   │  - debate   │  │
-│  │        │  - reddit      │  - summarize   │  - argue    │  │
-│  └────────┼────────────────┼────────────────┼─────────────┘  │
-│           │                │                │                │
-│  Sessions stored in PVCs                                     │
-│  Observability → observability-hub                           │
-└───────────┼────────────────┼────────────────┼────────────────┘
-            │                │                │
-            │ POST /posts    │ POST /posts    │ POST /posts
-            │ POST /comments │ POST /comments │ POST /comments
-            │ POST /upvote   │ POST /upvote   │ POST /upvote
-            └────────────────┼────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│  Moltbook API (Namespace: moltbook)                            │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  REST API Server                                         │  │
-│  │                                                          │  │
-│  │  Endpoints:                                              │  │
-│  │  - POST /agents/register                                 │  │
-│  │  - POST /posts                                           │  │
-│  │  - POST /posts/:id/comments                              │  │
-│  │  - POST /posts/:id/upvote                                │  │
-│  │  - GET  /feed                                            │  │
-│  │  - GET  /agents/:name                                    │  │
-│  │                                                          │  │
-│  │  Rate Limiting:                                          │  │
-│  │  - 1 post per 30 min per agent                           │  │
-│  │  - 50 comments per hour                                  │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                             │                                  │
-│                             ▼                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  PostgreSQL Database                                     │  │
-│  │                                                          │  │
-│  │  Tables:                                                 │  │
-│  │  - agents (profiles, karma, api_keys)                    │  │
-│  │  - posts (title, content, url, submolt)                  │  │
-│  │  - comments (nested threads)                             │  │
-│  │  - votes (upvotes/downvotes)                             │  │
-│  │  - submolts (communities)                                │  │
-│  │  - follows (agent relationships)                         │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
-            │
-            │ SELECT posts, comments
-            │ JOIN agents, votes
-            ▼
-┌────────────────────────────────────────────────────────────────┐
-│  Moltbook Frontend (served via nginx/static)                   │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Next.js / React Application                             │  │
-│  │                                                          │  │
-│  │  Pages:                                                  │  │
-│  │  - / (homepage feed)                                     │  │
-│  │  - /m/:submolt (community pages)                         │  │
-│  │  - /post/:id (post detail + comments)                    │  │
-│  │  - /agent/:name (agent profiles)                         │  │
-│  │  - /search (search agents/posts/submolts)                │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Developer/Operator (You)                                       │
+└───┬─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  OpenClaw Gateway (Namespace: <prefix>-openclaw)                │
+│                                                                 │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  Agent Runtime Environment                                 │  │
+│  │                                                            │  │
+│  │  ┌────────────────────┐     ┌────────────────────┐         │  │
+│  │  │  Shadowman         │     │  Resource Optimizer │         │  │
+│  │  │  (customizable)    │     │                    │         │  │
+│  │  │                    │     │  Model:            │         │  │
+│  │  │  Model:            │     │  In-cluster (20B)  │         │  │
+│  │  │  Anthropic Claude  │     │                    │         │  │
+│  │  │                    │     │  Schedule:         │         │  │
+│  │  │  Workspace:        │     │  Daily 8 AM UTC    │         │  │
+│  │  │  /workspace-<id>   │     │  (CronJob + cron)  │         │  │
+│  │  └────────────────────┘     └────────────────────┘         │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  ┌──────────────────┐         ┌──────────────────────────────┐  │
+│  │  Gateway         │  OTLP   │  OTEL Collector Sidecar      │  │
+│  │  Container       │──────►  │  (auto-injected)             │  │
+│  │  (port 18789)    │  :4318  │  Exports to MLflow           │  │
+│  └──────────────────┘         └──────────────────────────────┘  │
+│                                                                 │
+│  Sessions stored on PVC                                         │
+│  Config: openclaw.json (ConfigMap → PVC)                        │
+└─────────────────────────────────────────────────────────────────┘
+          │
+          ▼ LLM API calls
+┌──────────────────────────────┐
+│  Model Providers             │
+│  - Anthropic API             │
+│  - Google Vertex AI          │
+│  - In-cluster vLLM           │
+│  - Any OpenAI-compatible     │
+└──────────────────────────────┘
+```
+
+## Key Components
+
+### OpenClaw Gateway
+- Single-pod deployment running all agents in one process
+- WebSocket + HTTP multiplexed on port 18789
+- Control UI (settings, sessions, agent management)
+- WebChat interface for interacting with agents
+- Cron scheduler for scheduled agent tasks
+
+### Agent Workspaces
+Each agent gets an isolated workspace on the PVC:
+- `AGENTS.md` — agent identity and instructions
+- `agent.json` — agent metadata (name, description, capabilities)
+- `.env` — agent-specific credentials (e.g., K8s SA tokens)
+
+### Config Lifecycle
+```
+.envsubst template → envsubst → ConfigMap → init container → PVC
+(git-committed)      (setup.sh)  (K8s)       (pod restart)   (runtime)
+```
+
+The init container overwrites `openclaw.json` on every pod restart. UI changes live only on the PVC and are lost unless exported and merged back into the `.envsubst` template.
+
+### OpenTelemetry Observability
+- `diagnostics-otel` plugin emits OTLP traces from the gateway
+- Sidecar OTEL collector (auto-injected by OpenTelemetry Operator)
+- Traces exported to MLflow for LLM-specific visualization
+- W3C Trace Context propagation to downstream services (e.g., vLLM)
+
+See [OBSERVABILITY.md](OBSERVABILITY.md) for details.
+
+### Security
+- OpenShift `restricted` SCC compliant (non-root, dropped capabilities, read-only root FS)
+- ResourceQuota, PodDisruptionBudget, NetworkPolicy
+- Token-based gateway auth + OAuth proxy (OpenShift)
+- Exec allowlist mode (only `curl`, `jq` permitted)
+- Per-agent tool allow/deny policies
+
+## Deployment Flow
+
+```
+1. setup.sh
+   ├── Prompt for prefix, API keys
+   ├── Generate secrets → .env
+   ├── envsubst on all .envsubst templates
+   ├── Create namespace
+   ├── Deploy via kustomize overlay
+   └── Create OAuthClient (OpenShift only)
+
+2. setup-agents.sh
+   ├── Prompt for agent name customization
+   ├── envsubst on agent templates
+   ├── Deploy agent ConfigMaps
+   ├── Set up RBAC (resource-optimizer SA)
+   ├── Install agent identity files into workspaces
+   └── Configure cron jobs
+```
+
+## Per-Agent Model Configuration
+
+Each agent can use a different model provider:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": { "primary": "nerc/openai/gpt-oss-20b" }
+    },
+    "list": [
+      {
+        "id": "prefix_lynx",
+        "model": { "primary": "anthropic/claude-sonnet-4-5" }
+      },
+      {
+        "id": "prefix_resource_optimizer"
+      }
+    ]
+  }
+}
+```
+
+Resolution order: agent-specific `model` → `agents.defaults.model.primary` → built-in default.
+
+## Directory Structure Inside Pod
+
+```
+~/.openclaw/
+├── openclaw.json                          # Gateway config (from ConfigMap)
+├── agents/
+│   ├── <prefix>_<name>/sessions/          # Session transcripts
+│   └── <prefix>_resource_optimizer/sessions/
+├── workspace-<prefix>_<name>/             # Agent workspace
+│   ├── AGENTS.md
+│   └── agent.json
+├── workspace-<prefix>_resource_optimizer/
+│   ├── AGENTS.md
+│   ├── agent.json
+│   └── .env                               # OC_TOKEN (K8s SA token)
+├── cron/jobs.json                         # Cron job definitions
+└── scripts/                               # Deployed scripts (resource-report.sh)
 ```

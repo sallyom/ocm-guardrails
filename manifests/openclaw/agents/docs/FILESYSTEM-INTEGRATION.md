@@ -1,7 +1,6 @@
 # OpenClaw UI Filesystem Integration - Analysis & Fixes
 
 > **Date**: 2026-02-09
-> **Context**: Running OpenClaw on OpenShift/K8s with custom agents (philbot, audit-reporter, resource-optimizer, mlops-monitor)
 
 ## Issues Discovered
 
@@ -68,7 +67,6 @@ The Usage view:
 **Problem**: Init container only created session directory for `shadowman`:
 ```bash
 mkdir -p /home/node/.openclaw/agents/shadowman/sessions  # ✅
-# Missing directories for philbot, audit_reporter, etc.
 ```
 
 **Status**: ✅ **FIXED** (see below)
@@ -77,14 +75,13 @@ mkdir -p /home/node/.openclaw/agents/shadowman/sessions  # ✅
 
 ## Fixes Applied
 
-### Fix 1: Updated `setup-agent-workspaces.sh`
+### Fix 1: Updated `setup-agents.sh`
 
-**File**: `manifests/openclaw/agents/setup-agent-workspaces.sh`
+**File**: `manifests/openclaw/agents/setup-agents.sh`
 
 **Changes**:
 ```bash
 # Added session directory creation
-mkdir -p ~/.openclaw/agents/philbot/sessions
 mkdir -p ~/.openclaw/agents/audit_reporter/sessions
 mkdir -p ~/.openclaw/agents/resource_optimizer/sessions
 mkdir -p ~/.openclaw/agents/mlops_monitor/sessions
@@ -104,7 +101,6 @@ chmod -R 775 ~/.openclaw/agents
 **Changes**:
 ```bash
 # Create session directories for add-on agents
-mkdir -p /home/node/.openclaw/agents/philbot/sessions
 mkdir -p /home/node/.openclaw/agents/audit_reporter/sessions
 mkdir -p /home/node/.openclaw/agents/resource_optimizer/sessions
 mkdir -p /home/node/.openclaw/agents/mlops_monitor/sessions
@@ -124,7 +120,6 @@ mkdir -p /home/node/.openclaw/agents/mlops_monitor/sessions
 │   │   └── sessions/                    # Session transcripts ← Used by Usage view
 │   │       ├── {sessionId}.jsonl
 │   │       └── sessions.json
-│   ├── philbot/
 │   │   └── sessions/                    # ← FIXED: Now created
 │   ├── audit_reporter/
 │   │   └── sessions/                    # ← FIXED: Now created
@@ -137,7 +132,6 @@ mkdir -p /home/node/.openclaw/agents/mlops_monitor/sessions
 │   ├── AGENTS.md
 │   └── agent.json
 │
-├── workspace-philbot/                   # PhilBot workspace
 │
 ├── workspace-audit-reporter/            # Audit Reporter workspace
 │   └── reports/                         # Reports saved here
@@ -190,7 +184,6 @@ oc exec -n openclaw $POD -c gateway -- ls -la ~/.openclaw/agents/
 
 **Expected output**:
 ```
-drwxrwxr-x  philbot
 drwxrwxr-x  audit_reporter
 drwxrwxr-x  resource_optimizer
 drwxrwxr-x  mlops_monitor
@@ -211,7 +204,6 @@ oc exec -n openclaw $POD -c gateway -- \
 
 1. Navigate to OpenClaw UI
 2. Click "Usage" tab
-3. Select an agent from dropdown (philbot, audit_reporter, etc.)
 4. **Expected**: See session data, token counts, costs
 
 ---
@@ -262,23 +254,18 @@ export async function getAgentReport(agentId: string, filename: string) {
 
 ---
 
-### Option 3: Integrate Reports into Moltbook
 
-**Goal**: Post report summaries to Moltbook, link to full reports
 
 **Current State**: ✅ **Already implemented!**
 
 Agents are configured to:
 1. Save full report to workspace: `~/.openclaw/workspace-{agent}/reports/`
-2. Post short summary to Moltbook with link to full report
 
 **Example** (from audit-reporter cron job):
 ```bash
 # STEP 4: Create detailed report in workspace
 cat > ~/.openclaw/workspace-audit-reporter/reports/${TIMESTAMP}-report.md
 
-# STEP 5: Use moltbook skill to post SHORT announcement
-# Posts to Moltbook with link: "Full report: ~/.openclaw/workspace-audit-reporter/reports/latest.md"
 ```
 
 **Access full reports**:
@@ -298,7 +285,7 @@ oc exec -n openclaw deployment/openclaw -c gateway -- \
 | Volume mount issues | N/A | ✅ Already correct | No changes needed |
 
 **Next Steps**:
-1. ✅ Run `setup-agent-workspaces.sh` on existing deployment
+1. ✅ Run `setup-agents.sh` on existing deployment
 2. ✅ Apply updated deployment manifest for future deployments
 3. Wait for cron jobs to execute and verify session transcripts appear
 4. Check Usage view in UI to confirm session data is visible

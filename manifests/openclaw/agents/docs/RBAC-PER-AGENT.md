@@ -6,8 +6,6 @@ This directory implements **per-agent RBAC** - each agent gets its own ServiceAc
 
 ```
 OpenClaw Pod
-├── Agent: philbot (no cluster access needed)
-├── Agent: audit_reporter (admin in Moltbook, no cluster access)
 ├── Agent: resource_optimizer
 │   └── Uses: resource-optimizer-sa token
 │       └── Permissions: Read-only in resource-demo namespace

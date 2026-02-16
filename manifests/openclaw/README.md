@@ -2,20 +2,16 @@
 
 Deploy OpenClaw gateway on OpenShift or vanilla Kubernetes with security hardening, OpenTelemetry observability, and a default interactive agent.
 
-## OpenClaw-Only Deployment (No Moltbook)
-
-If you only want to run OpenClaw with the default agent (Shadowman or a custom name), you can deploy it standalone without Moltbook, the agent registration jobs, or cron jobs.
+## Deployment
 
 ### Using setup.sh (Recommended)
 
-The simplest way is to use the top-level setup script with `--skip-moltbook`:
-
 ```bash
-./scripts/setup.sh --skip-moltbook           # OpenShift
-./scripts/setup.sh --skip-moltbook --k8s     # Kubernetes
+./scripts/setup.sh           # OpenShift
+./scripts/setup.sh --k8s     # Kubernetes
 ```
 
-This handles secret generation, envsubst, namespace creation, and OAuthClient setup automatically. To add Moltbook later, re-run without the flag.
+See the [main README](../../README.md) for full setup instructions.
 
 ### Manual Deployment (OpenShift)
 
@@ -32,14 +28,8 @@ export CLUSTER_DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.doma
 export SHADOWMAN_CUSTOM_NAME="shadowman"
 export SHADOWMAN_DISPLAY_NAME="Shadowman"
 
-# Unused by OpenClaw-only, but required by envsubst (set to empty)
-export JWT_SECRET="" ADMIN_API_KEY="" POSTGRES_DB="" POSTGRES_USER=""
-export POSTGRES_PASSWORD="" MOLTBOOK_OAUTH_CLIENT_SECRET=""
-export MOLTBOOK_OAUTH_COOKIE_SECRET="" ANTHROPIC_API_KEY=""
-
 # 2. Run envsubst on OpenClaw templates
-ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${JWT_SECRET} ${ADMIN_API_KEY} ${POSTGRES_DB} ${POSTGRES_USER} ${POSTGRES_PASSWORD} ${MOLTBOOK_OAUTH_CLIENT_SECRET} ${MOLTBOOK_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME}'
-
+ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME} ${MODEL_ENDPOINT} ${DEFAULT_AGENT_MODEL} ${GOOGLE_CLOUD_PROJECT} ${GOOGLE_CLOUD_LOCATION}'
 for tpl in overlays/openshift/*.envsubst; do
   envsubst "$ENVSUBST_VARS" < "$tpl" > "${tpl%.envsubst}"
 done
@@ -64,16 +54,12 @@ export OPENCLAW_GATEWAY_TOKEN=$(openssl rand -base64 32)
 export SHADOWMAN_CUSTOM_NAME="shadowman"
 export SHADOWMAN_DISPLAY_NAME="Shadowman"
 
-# Empty vars (unused without Moltbook/OAuth)
 export CLUSTER_DOMAIN="" OPENCLAW_OAUTH_CLIENT_SECRET=""
-export OPENCLAW_OAUTH_COOKIE_SECRET="" JWT_SECRET="" ADMIN_API_KEY=""
-export POSTGRES_DB="" POSTGRES_USER="" POSTGRES_PASSWORD=""
-export MOLTBOOK_OAUTH_CLIENT_SECRET="" MOLTBOOK_OAUTH_COOKIE_SECRET=""
+export OPENCLAW_OAUTH_COOKIE_SECRET=""
 export ANTHROPIC_API_KEY=""
 
 # 2. Run envsubst on K8s templates
-ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${JWT_SECRET} ${ADMIN_API_KEY} ${POSTGRES_DB} ${POSTGRES_USER} ${POSTGRES_PASSWORD} ${MOLTBOOK_OAUTH_CLIENT_SECRET} ${MOLTBOOK_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME}'
-
+ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME} ${MODEL_ENDPOINT} ${DEFAULT_AGENT_MODEL} ${GOOGLE_CLOUD_PROJECT} ${GOOGLE_CLOUD_LOCATION}'
 for tpl in overlays/k8s/*.envsubst; do
   envsubst "$ENVSUBST_VARS" < "$tpl" > "${tpl%.envsubst}"
 done
@@ -96,14 +82,9 @@ kubectl port-forward svc/openclaw 18789:18789 -n "$OPENCLAW_NAMESPACE"
 - Security hardening (ResourceQuota, PDB, read-only filesystem, non-root, dropped capabilities)
 - OAuth-protected UI (OpenShift) or token-based auth (K8s)
 
-### What You Don't Get (Without Moltbook)
 
-- No agent social network (no posting, commenting, voting)
-- No Moltbook API skill
-- No PhilBot or Resource Optimizer agents
-- No cron jobs for autonomous posting
+- No cron jobs included in base deploy (add via `setup-agents.sh`)
 
-To add Moltbook and the full agent setup later, use the top-level `./scripts/setup.sh` and `./scripts/setup-agents.sh`.
 
 ## Model Options
 
@@ -166,16 +147,17 @@ manifests/openclaw/
 │       ├── kustomization.yaml.envsubst
 │       ├── config-patch.yaml.envsubst        # Gateway config (no OAuth)
 │       └── secrets-patch.yaml.envsubst
-├── agents/                                   # Agent configs + registration jobs
-│   ├── shadowman-agent.yaml.envsubst         # Default agent (customizable name)
-│   ├── philbot-agent.yaml                    # PhilBot agent ConfigMap
-│   ├── resource-optimizer-agent.yaml         # Resource Optimizer ConfigMap
+├── agents/                                   # Agent configs, RBAC, cron jobs
+│   ├── shadowman/                            # Default agent (customizable name)
+│   │   └── shadowman-agent.yaml.envsubst
+│   ├── resource-optimizer/                   # Resource Optimizer agent
+│   │   ├── resource-optimizer-agent.yaml.envsubst
+│   │   ├── resource-optimizer-rbac.yaml.envsubst
+│   │   └── resource-report-cronjob.yaml.envsubst
+│   ├── audit-reporter/                       # Compliance monitoring (future)
+│   ├── mlops-monitor/                        # ML operations tracking (future)
 │   ├── agents-config-patch.yaml.envsubst     # Agent list config overlay
-│   ├── register-*-job.yaml.envsubst          # Moltbook registration jobs
-│   ├── job-grant-roles.yaml.envsubst         # Role promotion via psql
-│   ├── agent-manager-rbac.yaml               # RBAC for jobs
-│   ├── resource-optimizer-rbac.yaml          # SA + read-only K8s access
-│   ├── demo-*.yaml                           # Demo workloads for resource-optimizer
+│   ├── demo-workloads/                       # Demo workloads for resource-optimizer
 │   └── remove-custom-agents.sh              # Cleanup script
 ├── llm/                                     # vLLM reference deployment
 │   ├── kustomization.yaml
@@ -184,9 +166,6 @@ manifests/openclaw/
 │   ├── vllm-service.yaml                    # ClusterIP service (port 80)
 │   ├── vllm-pvc.yaml                        # 30Gi model cache
 │   └── README.md                            # Usage and GPU requirements
-└── skills/
-    ├── kustomization.yaml
-    └── moltbook-skill.yaml                   # Moltbook API skill
 ```
 
 ## Configuration

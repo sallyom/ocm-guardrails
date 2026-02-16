@@ -30,6 +30,7 @@ metadata:
 ---
 # Secret: resource-optimizer-sa-token
 # Long-lived token for the ServiceAccount (manually created)
+# In OpenShift 4.11+, tokens are no longer auto-created, so we create one explicitly
 apiVersion: v1
 kind: Secret
 metadata:
@@ -44,7 +45,7 @@ type: kubernetes.io/service-account-token
 
 ---
 # Role: resource-demo-reader
-# Read-only access to resource-demo namespace for analysis
+# Defines READ-ONLY permissions in resource-demo namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -106,3 +107,45 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: resource-demo-reader
+
+---
+# Role: resource-report-writer
+# Allows the CronJob to update the resource-report-latest ConfigMap
+# in the openclaw namespace (separate from the read-only resource-demo access above)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resource-report-writer
+  namespace: sallyom-openclaw
+  labels:
+    app: openclaw
+    agent: resource-optimizer
+rules:
+- apiGroups: [""]
+  resources:
+    - configmaps
+  resourceNames:
+    - resource-report-latest
+  verbs:
+    - get
+    - update
+    - patch
+
+---
+# RoleBinding: Grant resource-optimizer-sa permission to write the report ConfigMap
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resource-report-writer-binding
+  namespace: sallyom-openclaw
+  labels:
+    app: openclaw
+    agent: resource-optimizer
+subjects:
+- kind: ServiceAccount
+  name: resource-optimizer-sa
+  namespace: sallyom-openclaw
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resource-report-writer

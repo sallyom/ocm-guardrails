@@ -2,18 +2,16 @@
 # ============================================================================
 # TEARDOWN SCRIPT
 # ============================================================================
-# Removes OpenClaw + Moltbook deployments and namespaces.
+# Removes OpenClaw deployment and namespace.
 #
 # Usage:
 #   ./teardown.sh                    # Teardown OpenShift (default)
 #   ./teardown.sh --k8s              # Teardown vanilla Kubernetes
-#   ./teardown.sh --openclaw-only    # Only teardown OpenClaw namespace
-#   ./teardown.sh --moltbook-only    # Only teardown Moltbook namespace
 #   ./teardown.sh --delete-env       # Also delete .env file
 #
 # This script:
 #   - Reads .env for namespace and prefix configuration
-#   - Deletes all resources in namespaces before deleting namespaces
+#   - Deletes all resources in namespace before deleting namespace
 #     (avoids finalizer hang during namespace deletion)
 #   - Removes cluster-scoped OAuthClients (OpenShift only)
 #   - Strips finalizers from stuck namespaces
@@ -30,14 +28,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Parse flags
 K8S_MODE=false
-OPENCLAW_ONLY=false
-MOLTBOOK_ONLY=false
 DELETE_ENV=false
 for arg in "$@"; do
   case "$arg" in
     --k8s) K8S_MODE=true ;;
-    --openclaw-only) OPENCLAW_ONLY=true ;;
-    --moltbook-only) MOLTBOOK_ONLY=true ;;
     --delete-env) DELETE_ENV=true ;;
   esac
 done
@@ -62,7 +56,7 @@ log_error()   { echo -e "${RED}❌ $1${NC}"; }
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║  OpenClaw + Moltbook Teardown                              ║"
+echo "║  OpenClaw Teardown                                         ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -84,19 +78,8 @@ if [ -z "${OPENCLAW_NAMESPACE:-}" ]; then
   fi
 fi
 
-# Build list of namespaces to delete
-TEARDOWN_OPENCLAW=true
-TEARDOWN_MOLTBOOK=true
-if $OPENCLAW_ONLY; then
-  TEARDOWN_MOLTBOOK=false
-fi
-if $MOLTBOOK_ONLY; then
-  TEARDOWN_OPENCLAW=false
-fi
-
-echo "Namespaces to teardown:"
-if $TEARDOWN_OPENCLAW; then echo "  - $OPENCLAW_NAMESPACE"; fi
-if $TEARDOWN_MOLTBOOK; then echo "  - moltbook"; fi
+echo "Namespace to teardown:"
+echo "  - $OPENCLAW_NAMESPACE"
 echo ""
 
 read -p "Continue? (y/N): " -n 1 -r
@@ -172,31 +155,16 @@ teardown_namespace() {
 }
 
 # Teardown OpenClaw
-if $TEARDOWN_OPENCLAW; then
-  # Remove cluster-scoped OAuthClient (OpenShift only)
-  if ! $K8S_MODE; then
-    log_info "Removing OpenClaw OAuthClient..."
-    $KUBECTL delete oauthclient "$OPENCLAW_NAMESPACE" 2>/dev/null && \
-      log_success "OAuthClient $OPENCLAW_NAMESPACE deleted" || \
-      log_warn "OAuthClient $OPENCLAW_NAMESPACE not found (already removed)"
-    echo ""
-  fi
-
-  teardown_namespace "$OPENCLAW_NAMESPACE"
+# Remove cluster-scoped OAuthClient (OpenShift only)
+if ! $K8S_MODE; then
+  log_info "Removing OpenClaw OAuthClient..."
+  $KUBECTL delete oauthclient "$OPENCLAW_NAMESPACE" 2>/dev/null && \
+    log_success "OAuthClient $OPENCLAW_NAMESPACE deleted" || \
+    log_warn "OAuthClient $OPENCLAW_NAMESPACE not found (already removed)"
+  echo ""
 fi
 
-# Teardown Moltbook
-if $TEARDOWN_MOLTBOOK; then
-  if ! $K8S_MODE; then
-    log_info "Removing Moltbook OAuthClient..."
-    $KUBECTL delete oauthclient moltbook-frontend 2>/dev/null && \
-      log_success "OAuthClient moltbook-frontend deleted" || \
-      log_warn "OAuthClient moltbook-frontend not found (already removed)"
-    echo ""
-  fi
-
-  teardown_namespace "moltbook"
-fi
+teardown_namespace "$OPENCLAW_NAMESPACE"
 
 # Optionally delete .env
 if $DELETE_ENV && [ -f "$REPO_ROOT/.env" ]; then

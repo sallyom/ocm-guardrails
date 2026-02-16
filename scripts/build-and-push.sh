@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BUILD-AND-PUSH.SH - Build OpenClaw + Moltbook with Podman
 # =============================================================================
 #
 # Builds images on x86 machine using podman, then pushes to registry
 #
 # Usage:
-#   ./build-and-push.sh <registry-url> [openclaw-tag] [moltbook-tag] [moltbook-frontend-tag]
 #
 # Examples:
 #   ./build-and-push.sh quay.io/myorg
 #   ./build-and-push.sh registry.example.com:5000/myproject
-#   ./build-and-push.sh quay.io/myorg openclaw:v1.0.0 moltbook-api:v1.0.0 moltbook-frontend:v1.0.0
 #
 # =============================================================================
 
@@ -19,8 +16,6 @@ set -euo pipefail
 
 REGISTRY="${1:-}"
 OPENCLAW_TAG="${2:-openclaw:latest}"
-MOLTBOOK_TAG="${3:-moltbook-api:latest}"
-MOLTBOOK_FRONTEND_TAG="${4:-moltbook-frontend:latest}"
 
 # Colors
 RED='\033[0;31m'
@@ -57,7 +52,6 @@ check_prerequisites() {
   section "Checking Prerequisites"
 
   if [ -z "$REGISTRY" ]; then
-    log_error "Usage: $0 <registry-url> [openclaw-tag] [moltbook-tag]"
     log_info "Example: $0 quay.io/myorg"
     exit 1
   fi
@@ -76,8 +70,6 @@ check_prerequisites() {
   log_success "git found: $(git --version)"
   log_info "Registry: $REGISTRY"
   log_info "OpenClaw tag: $OPENCLAW_TAG"
-  log_info "Moltbook API tag: $MOLTBOOK_TAG"
-  log_info "Moltbook Frontend tag: $MOLTBOOK_FRONTEND_TAG"
 }
 
 # Build OpenClaw
@@ -148,94 +140,20 @@ EOF
   log_success "OpenClaw built: $OPENCLAW_TAG"
 }
 
-# Build Moltbook API
-build_moltbook() {
-  section "Building Moltbook API"
-
-  MOLTBOOK_DIR="/tmp/moltbook-api-build"
-
-  log_info "Cloning Moltbook API with Guardrails..."
-  rm -rf "$MOLTBOOK_DIR"
-  # Clone from fork with Guardrails features (guardrails-mode branch)
-  git clone -b guardrails-mode https://github.com/sallyom/moltbook-api.git "$MOLTBOOK_DIR"
-
-  cd "$MOLTBOOK_DIR"
-
-  log_info "Using Dockerfile from repository..."
-
-  if [ ! -f "Dockerfile" ]; then
-    log_error "Dockerfile not found in repository"
-    exit 1
-  fi
-
-  log_info "Building Moltbook API image..."
-
-  podman build \
-    -f Dockerfile \
-    -t "$MOLTBOOK_TAG" \
-    --platform linux/amd64 \
-    .
-
-  cd -
-
-  log_success "Moltbook API built: $MOLTBOOK_TAG"
-}
-
-# Build Moltbook Frontend
-build_moltbook_frontend() {
-  section "Building Moltbook Frontend"
-
-  FRONTEND_DIR="/tmp/moltbook-frontend-build"
-
-  log_info "Cloning Moltbook Frontend (React + TypeScript)..."
-  rm -rf "$FRONTEND_DIR"
-  # Clone from moltyish-frontend repo (image still named moltbook-frontend)
-  git clone https://github.com/sallyom/moltyish-frontend.git "$FRONTEND_DIR"
-
-  cd "$FRONTEND_DIR"
-
-  log_info "Using Dockerfile from repository..."
-
-  if [ ! -f "Dockerfile" ]; then
-    log_error "Dockerfile not found in repository"
-    exit 1
-  fi
-
-  log_info "Building Moltbook Frontend image..."
-
-  podman build \
-    -f Dockerfile \
-    -t "$MOLTBOOK_FRONTEND_TAG" \
-    --platform linux/amd64 \
-    .
-
-  cd -
-
-  log_success "Moltbook Frontend built: $MOLTBOOK_FRONTEND_TAG"
-}
-
 # Tag images for registry
 tag_images() {
   section "Tagging Images for Registry"
 
   OPENCLAW_FULL="$REGISTRY/$OPENCLAW_TAG"
-  MOLTBOOK_FULL="$REGISTRY/$MOLTBOOK_TAG"
-  MOLTBOOK_FRONTEND_FULL="$REGISTRY/$MOLTBOOK_FRONTEND_TAG"
 
   log_info "Tagging OpenClaw: $OPENCLAW_FULL"
   podman tag "$OPENCLAW_TAG" "$OPENCLAW_FULL"
 
-  log_info "Tagging Moltbook API: $MOLTBOOK_FULL"
-  podman tag "$MOLTBOOK_TAG" "$MOLTBOOK_FULL"
 
-  log_info "Tagging Moltbook Frontend: $MOLTBOOK_FRONTEND_FULL"
-  podman tag "$MOLTBOOK_FRONTEND_TAG" "$MOLTBOOK_FRONTEND_FULL"
 
   log_success "Images tagged"
 
   export OPENCLAW_IMAGE="$OPENCLAW_FULL"
-  export MOLTBOOK_IMAGE="$MOLTBOOK_FULL"
-  export MOLTBOOK_FRONTEND_IMAGE="$MOLTBOOK_FRONTEND_FULL"
 }
 
 # Push images to registry
@@ -243,8 +161,6 @@ push_images() {
   section "Pushing Images to Registry"
 
   OPENCLAW_FULL="$REGISTRY/$OPENCLAW_TAG"
-  MOLTBOOK_FULL="$REGISTRY/$MOLTBOOK_TAG"
-  MOLTBOOK_FRONTEND_FULL="$REGISTRY/$MOLTBOOK_FRONTEND_TAG"
 
   log_warn "Make sure you're logged into the registry:"
   log_info "  podman login $REGISTRY"
@@ -255,13 +171,7 @@ push_images() {
   podman push "$OPENCLAW_FULL"
   log_success "Pushed: $OPENCLAW_FULL"
 
-  log_info "Pushing Moltbook API..."
-  podman push "$MOLTBOOK_FULL"
-  log_success "Pushed: $MOLTBOOK_FULL"
 
-  log_info "Pushing Moltbook Frontend..."
-  podman push "$MOLTBOOK_FRONTEND_FULL"
-  log_success "Pushed: $MOLTBOOK_FRONTEND_FULL"
 }
 
 # Display summary
@@ -274,11 +184,7 @@ display_summary() {
   echo -e "${BLUE}OpenClaw Image:${NC}"
   echo "  $REGISTRY/$OPENCLAW_TAG"
   echo ""
-  echo -e "${BLUE}Moltbook API Image:${NC}"
-  echo "  $REGISTRY/$MOLTBOOK_TAG"
   echo ""
-  echo -e "${BLUE}Moltbook Frontend Image:${NC}"
-  echo "  $REGISTRY/$MOLTBOOK_FRONTEND_TAG"
   echo ""
   echo -e "${YELLOW}Next Steps:${NC}"
   echo ""
@@ -286,11 +192,7 @@ display_summary() {
   echo "   # Edit manifests/openclaw/base/openclaw-deployment.yaml"
   echo "   image: $REGISTRY/$OPENCLAW_TAG"
   echo ""
-  echo "   # Edit manifests/moltbook/base/moltbook-api-deployment.yaml"
-  echo "   image: $REGISTRY/$MOLTBOOK_TAG"
   echo ""
-  echo "   # Edit manifests/moltbook/base/moltbook-frontend-deployment.yaml"
-  echo "   image: $REGISTRY/$MOLTBOOK_FRONTEND_TAG"
   echo ""
   echo "2. Deploy with setup script:"
   echo "   ./scripts/setup.sh"
@@ -301,8 +203,6 @@ display_summary() {
   # Save to file for easy copy-paste
   cat > /tmp/custom-images.env << EOF
 export OPENCLAW_IMAGE="$REGISTRY/$OPENCLAW_TAG"
-export MOLTBOOK_IMAGE="$REGISTRY/$MOLTBOOK_TAG"
-export MOLTBOOK_FRONTEND_IMAGE="$REGISTRY/$MOLTBOOK_FRONTEND_TAG"
 EOF
 
   log_success "Image names saved to: /tmp/custom-images.env"
@@ -315,15 +215,12 @@ main() {
   echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
   echo -e "${BLUE}║                                                            ║${NC}"
   echo -e "${BLUE}║   🏗️  Podman Build Script for OpenShift 🏗️               ║${NC}"
-  echo -e "${BLUE}║   OpenClaw + Moltbook                                      ║${NC}"
   echo -e "${BLUE}║                                                            ║${NC}"
   echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
   check_prerequisites
   build_openclaw
-  build_moltbook
-  build_moltbook_frontend
   tag_images
   push_images
   display_summary

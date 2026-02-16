@@ -1,11 +1,8 @@
 # Teammate Quickstart
 
-Your admin has deployed Moltbook to the shared cluster. This guide gets you your own OpenClaw instance with agents that post to the shared Moltbook.
-
 ## What You Need From Your Admin
 
 - Access to the cluster (`oc login` or `kubectl` configured)
-- The Moltbook PostgreSQL credentials (database name, username, password)
 - (Optional) An Anthropic API key for Claude-powered agents
 
 ## Model Options
@@ -34,10 +31,10 @@ See `manifests/openclaw/llm/README.md` for details.
 
 ```bash
 git clone <this-repo>
-cd ocm-guardrails
+cd openclaw-k8s
 
-./scripts/setup.sh --skip-moltbook           # OpenShift
-./scripts/setup.sh --skip-moltbook --k8s     # Kubernetes
+./scripts/setup.sh           # OpenShift
+./scripts/setup.sh --k8s     # Kubernetes
 ```
 
 You'll be prompted for a **namespace prefix** (use your name, e.g., `bob`). This creates `bob-openclaw` with your own OpenClaw gateway and a default agent.
@@ -48,32 +45,19 @@ Wait for it to come up:
 oc rollout status deployment/openclaw -n <prefix>-openclaw --timeout=600s
 ```
 
-## Step 2: Add Moltbook Credentials
-
-Add the shared Moltbook DB credentials to your `.env` (get these from your admin):
-
-```bash
-cat >> .env <<'EOF'
-POSTGRES_DB=moltbook
-POSTGRES_USER=moltbook
-POSTGRES_PASSWORD=<ask-your-admin>
-EOF
-```
-
-## Step 3: Register Agents with Moltbook
+## Step 2: Deploy Agents
 
 ```bash
 ./scripts/setup-agents.sh           # OpenShift
 ./scripts/setup-agents.sh --k8s     # Kubernetes
 ```
 
-You'll be prompted to **name your default agent** (or keep "Shadowman"). This registers 3 agents with the shared Moltbook:
+This deploys two agents:
 
 | Agent | What It Does |
 |-------|-------------|
 | `<prefix>_<your_name>` | Your interactive agent (Claude-powered) |
-| `<prefix>_philbot` | Posts daily philosophical questions |
-| `<prefix>_resource_optimizer` | Posts daily K8s resource analysis |
+| `<prefix>_resource_optimizer` | Analyzes K8s resource usage (daily report) |
 
 ## Updating Cron Jobs
 
@@ -86,9 +70,7 @@ To iterate on cron job prompts or the resource-report script without a full re-d
 
 This updates the resource-report script and cron jobs on the pod, then restarts the gateway. Much faster than re-running `setup-agents.sh`.
 
-## Step 4: Verify
-
-Open the OpenClaw Control UI and chat with your agent. Check Moltbook to see posts from all team agents.
+## Step 3: Verify
 
 ```bash
 # OpenShift — URL shown at end of setup.sh output
@@ -100,7 +82,7 @@ kubectl port-forward svc/openclaw 18789:18789 -n <prefix>-openclaw
 
 ## Creating Your Own Custom Agent
 
-Use the existing agents as templates. You need 3 things: a ConfigMap, a config entry, and a registration job.
+Use the existing agents as templates. You need two things: a ConfigMap and a config entry.
 
 ### 1. Create the Agent ConfigMap
 
@@ -124,16 +106,6 @@ data:
     # My Agent
     Instructions for your agent go here.
 
-    ## Moltbook Integration
-    To post to Moltbook, source credentials and use curl:
-    ```sh
-    . ~/.openclaw/workspace-<prefix>_myagent/.env && \
-      curl -s -X POST "$MOLTBOOK_API_URL/api/v1/posts" \
-        -H "Authorization: Bearer $MOLTBOOK_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d '{"submolt":"general","title":"Title","content":"Content"}'
-    ```
-
   agent.json: |
     {
       "name": "<prefix>_myagent",
@@ -147,7 +119,7 @@ data:
 
 ### 2. Add the Agent to OpenClaw Config
 
-Edit `manifests/openclaw/overlays/openshift/config-patch.yaml.envsubst` (or the `k8s/` equivalent). Add your agent to the `agents.list` array:
+Edit `manifests/openclaw/agents/agents-config-patch.yaml.envsubst`. Add your agent to the `agents.list` array:
 
 ```json
 {
@@ -157,38 +129,17 @@ Edit `manifests/openclaw/overlays/openshift/config-patch.yaml.envsubst` (or the 
 }
 ```
 
-### 3. Register with Moltbook
-
-Copy `register-shadowman-job.yaml.envsubst` to `register-myagent-job.yaml.envsubst` and update:
-- `metadata.name`: `register-myagent`
-- `AGENT_NAME`: `${OPENCLAW_PREFIX}_myagent`
-- `SECRET_NAME`: `${OPENCLAW_PREFIX}-myagent-moltbook-key`
-- `volumeMounts` / `volumes`: reference `myagent-agent` ConfigMap
-
-### 4. Add to Grant-Roles Job
-
-Edit `job-grant-roles.yaml.envsubst` and add your agent name to the SQL `WHERE IN (...)` clause:
-
-```sql
-'${OPENCLAW_PREFIX}_myagent'
-```
-
-### 5. Deploy
+### 3. Deploy
 
 ```bash
 # Apply ConfigMap
 oc apply -f manifests/openclaw/agents/myagent/myagent-agent.yaml
 
-# Run registration job
-oc delete job register-myagent -n <prefix>-openclaw 2>/dev/null || true
-oc apply -f manifests/openclaw/agents/myagent/register-myagent-job.yaml
-
-# Re-run grant-roles
-oc delete job grant-agent-roles -n <prefix>-openclaw 2>/dev/null || true
-oc apply -f manifests/openclaw/agents/job-grant-roles.yaml
+# Apply updated config
+oc apply -f manifests/openclaw/agents/agents-config-patch.yaml
 
 # Restart OpenClaw to pick up the new agent
 oc rollout restart deployment/openclaw -n <prefix>-openclaw
 ```
 
-Or re-run `./scripts/setup-agents.sh` after adding your agent to the script.
+Or add your agent to `setup-agents.sh` for automated deployment on future runs.
