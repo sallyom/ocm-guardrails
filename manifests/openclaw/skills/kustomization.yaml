@@ -1,0 +1,17 @@
+# Kustomization for OpenClaw Skills
+# Generates ConfigMaps from SKILL.md files
+# Deploy with: oc apply -k .
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openclaw
+
+configMapGenerator:
+  - name: a2a-skill
+    files:
+      - a2a/SKILL.md
+    options:
+      labels:
+        app: openclaw
+        skill: a2a
+      disableNameSuffixHash: true

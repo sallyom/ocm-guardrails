@@ -38,6 +38,11 @@ data:
         "controlUi": {
           "enabled": true,
           "dangerouslyDisableDeviceAuth": true
+        },
+        "http": {
+          "endpoints": {
+            "chatCompletions": {"enabled": true}
+          }
         }
       },
       "diagnostics": {
@@ -105,7 +110,7 @@ data:
         ],
         "exec": {
           "security": "allowlist",
-          "safeBins": ["curl"],
+          "safeBins": ["curl", "jq"],
           "timeoutSec": 30
         }
       },

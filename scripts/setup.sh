@@ -52,7 +52,7 @@ fi
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
@@ -164,8 +164,24 @@ OPENCLAW_NAMESPACE="${OPENCLAW_PREFIX}-openclaw"
 log_success "OpenClaw namespace: $OPENCLAW_NAMESPACE"
 echo ""
 
+# Prompt for agent name
+log_info "Your default agent is 'Shadowman'. You can customize its name."
+log_info "  This is the agent other teammates will see when you communicate via A2A."
+read -p "  Enter a name (or press Enter to keep 'Shadowman'): " CUSTOM_NAME
+if [ -n "$CUSTOM_NAME" ]; then
+  SHADOWMAN_DISPLAY_NAME="$CUSTOM_NAME"
+  SHADOWMAN_CUSTOM_NAME=$(echo "$CUSTOM_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd 'a-z0-9_')
+  log_success "Agent: '${SHADOWMAN_DISPLAY_NAME}' (id: ${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME})"
+else
+  SHADOWMAN_CUSTOM_NAME="shadowman"
+  SHADOWMAN_DISPLAY_NAME="Shadowman"
+  log_info "Keeping default name: Shadowman"
+fi
+echo ""
+
 # Confirm deployment
 log_warn "This will deploy OpenClaw to namespace: $OPENCLAW_NAMESPACE"
+log_warn "  Agent: ${SHADOWMAN_DISPLAY_NAME} (${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME})"
 read -p "Continue? (y/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -173,6 +189,11 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
   exit 0
 fi
 echo ""
+
+# Save prompted values (source .env would clobber them)
+_PROMPTED_PREFIX="$OPENCLAW_PREFIX"
+_PROMPTED_AGENT_ID="$SHADOWMAN_CUSTOM_NAME"
+_PROMPTED_AGENT_DISPLAY="$SHADOWMAN_DISPLAY_NAME"
 
 # Generate or reuse secrets
 if [ -f "$REPO_ROOT/.env" ]; then
@@ -184,7 +205,13 @@ if [ -f "$REPO_ROOT/.env" ]; then
   log_success "Secrets loaded from .env"
   echo ""
 
-  # Default any missing variables to empty (handles corrupted/partial .env files)
+  # Prompted values take precedence over what was in .env
+  OPENCLAW_PREFIX="$_PROMPTED_PREFIX"
+  OPENCLAW_NAMESPACE="${_PROMPTED_PREFIX}-openclaw"
+  SHADOWMAN_CUSTOM_NAME="$_PROMPTED_AGENT_ID"
+  SHADOWMAN_DISPLAY_NAME="$_PROMPTED_AGENT_DISPLAY"
+
+  # Default any missing variables to empty
   OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
   OPENCLAW_OAUTH_CLIENT_SECRET="${OPENCLAW_OAUTH_CLIENT_SECRET:-}"
   OPENCLAW_OAUTH_COOKIE_SECRET="${OPENCLAW_OAUTH_COOKIE_SECRET:-}"
@@ -200,9 +227,6 @@ if [ -f "$REPO_ROOT/.env" ]; then
     log_warn ".env is missing OPENCLAW_GATEWAY_TOKEN — regenerating secrets"
     OPENCLAW_GATEWAY_TOKEN=$(generate_secret)
   fi
-
-  # Still allow prefix/namespace override (already set above from prompt)
-  # but keep all existing secrets intact
 else
   log_info "Generating random secrets..."
 
@@ -294,6 +318,8 @@ VERTEX_ENABLED=$VERTEX_ENABLED
 GOOGLE_CLOUD_PROJECT=$GOOGLE_CLOUD_PROJECT
 GOOGLE_CLOUD_LOCATION=$GOOGLE_CLOUD_LOCATION
 VERTEX_SA_JSON_PATH=$VERTEX_SA_JSON_PATH
+SHADOWMAN_CUSTOM_NAME=$SHADOWMAN_CUSTOM_NAME
+SHADOWMAN_DISPLAY_NAME=$SHADOWMAN_DISPLAY_NAME
 EOF
 log_success ".env file created at $REPO_ROOT/.env"
 echo ""
@@ -305,7 +331,7 @@ set -a
 source "$REPO_ROOT/.env"
 set +a
 
-# Default agent name (customizable via setup-agents.sh; defaults to "shadowman" for first deploy)
+# Agent name (set during initial setup, customizable via setup-agents.sh)
 export SHADOWMAN_CUSTOM_NAME="${SHADOWMAN_CUSTOM_NAME:-shadowman}"
 export SHADOWMAN_DISPLAY_NAME="${SHADOWMAN_DISPLAY_NAME:-Shadowman}"
 
@@ -348,7 +374,13 @@ fi
 # Create namespace
 log_info "Creating namespace..."
 $KUBECTL create namespace "$OPENCLAW_NAMESPACE" --dry-run=client -o yaml | $KUBECTL apply -f - > /dev/null
-log_success "Namespace created: $OPENCLAW_NAMESPACE"
+$KUBECTL label namespace "$OPENCLAW_NAMESPACE" kagenti-enabled=true --overwrite > /dev/null
+$KUBECTL annotate namespace "$OPENCLAW_NAMESPACE" \
+  "openclaw.dev/owner=$OPENCLAW_PREFIX" \
+  "openclaw.dev/agent-name=$SHADOWMAN_DISPLAY_NAME" \
+  "openclaw.dev/agent-id=${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}" \
+  --overwrite > /dev/null
+log_success "Namespace created: $OPENCLAW_NAMESPACE (owner: $OPENCLAW_PREFIX, agent: $SHADOWMAN_DISPLAY_NAME)"
 echo ""
 
 # Create Vertex AI credentials secret (if enabled)
@@ -363,13 +395,25 @@ if [ "${VERTEX_ENABLED:-}" = "true" ] && [ -n "${VERTEX_SA_JSON_PATH:-}" ] && [ 
 fi
 
 if $K8S_MODE; then
-  log_info "Skipping OAuthClient creation (not needed in Kubernetes mode)"
+  log_info "Skipping OAuthClient and SCC (not needed in Kubernetes mode)"
   echo ""
 else
-  # Deploy OAuthClients separately (cluster-scoped, can't go through Kustomize namespace transformer)
-  log_info "Creating OAuthClient (requires cluster-admin)..."
+  # Deploy cluster-scoped resources separately (can't go through Kustomize namespace transformer)
 
-  # OpenClaw OAuthClient
+  # SCC definition + RBAC grant
+  log_info "Applying AuthBridge SCC and RBAC grant..."
+  if oc apply -f "$REPO_ROOT/manifests/openclaw/base/openclaw-scc.yaml" 2>/dev/null && \
+     oc apply -f "$OPENCLAW_OVERLAY/scc-rbac.yaml" 2>/dev/null; then
+    log_success "SCC openclaw-authbridge applied and granted to openclaw-oauth-proxy"
+  else
+    log_warn "Could not apply SCC (requires cluster-admin permissions)"
+    log_warn "Ask your cluster admin to run:"
+    echo "    oc apply -f $REPO_ROOT/manifests/openclaw/base/openclaw-scc.yaml"
+    echo "    oc apply -f $OPENCLAW_OVERLAY/scc-rbac.yaml"
+  fi
+
+  # OAuthClient
+  log_info "Creating OAuthClient..."
   if oc apply -f "$OPENCLAW_OVERLAY/oauthclient.yaml" 2>/dev/null; then
     log_success "OpenClaw OAuthClient created"
   else
@@ -389,6 +433,31 @@ log_info "  ✓ Health probes"
 log_info "  ✓ Device authentication"
 $KUBECTL apply -k "$OPENCLAW_OVERLAY"
 log_success "OpenClaw deployed with enterprise security"
+echo ""
+
+# Install A2A skill (cross-instance agent communication)
+log_info "Installing A2A skill..."
+SKILLS_DIR="$REPO_ROOT/manifests/openclaw/skills"
+$KUBECTL kustomize "$SKILLS_DIR" \
+  | sed "s/namespace: openclaw/namespace: $OPENCLAW_NAMESPACE/g" \
+  | $KUBECTL apply -f -
+log_success "A2A skill ConfigMap deployed"
+
+# Wait for pod to be ready before copying skill into workspace
+log_info "Waiting for OpenClaw pod to start..."
+if $KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=300s 2>/dev/null; then
+  POD=$($KUBECTL get pods -n "$OPENCLAW_NAMESPACE" -l app=openclaw --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$POD" ]; then
+    $KUBECTL get configmap a2a-skill -n "$OPENCLAW_NAMESPACE" -o jsonpath='{.data.SKILL\.md}' | \
+      $KUBECTL exec -i -n "$OPENCLAW_NAMESPACE" "$POD" -c gateway -- \
+        sh -c 'mkdir -p /home/node/.openclaw/skills/a2a && cat > /home/node/.openclaw/skills/a2a/SKILL.md'
+    log_success "A2A skill installed into workspace"
+  else
+    log_warn "Could not find running pod — run install-a2a-skill.sh manually after pod starts"
+  fi
+else
+  log_warn "Pod not ready yet — run install-a2a-skill.sh manually after pod starts"
+fi
 echo ""
 
 echo ""

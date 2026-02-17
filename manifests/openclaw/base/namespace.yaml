@@ -5,3 +5,4 @@ metadata:
   name: openclaw
   labels:
     app: openclaw
+    kagenti-enabled: "true"

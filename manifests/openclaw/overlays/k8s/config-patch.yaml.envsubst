@@ -17,7 +17,8 @@ data:
         "bind": "loopback",
         "port": 18789,
         "auth": {"mode": "token", "allowTailscale": false},
-        "controlUi": {"enabled": true, "dangerouslyDisableDeviceAuth": true}
+        "controlUi": {"enabled": true, "dangerouslyDisableDeviceAuth": true},
+        "http": {"endpoints": {"chatCompletions": {"enabled": true}}}
       },
       "diagnostics": {
         "enabled": true,
@@ -69,7 +70,8 @@ data:
             "id": "${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}",
             "name": "${SHADOWMAN_DISPLAY_NAME}",
             "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}",
-            "model": {"primary": "${DEFAULT_AGENT_MODEL}"}
+            "model": {"primary": "${DEFAULT_AGENT_MODEL}"},
+            "subagents": {"allowAgents": ["*"]}
           }
         ]
       },

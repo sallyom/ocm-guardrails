@@ -1,0 +1,223 @@
+# ConfigMap: A2A protocol bridge for Kagenti integration
+# Translates Google A2A JSON-RPC protocol to OpenClaw's OpenAI-compatible API
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: a2a-bridge
+  namespace: openclaw
+  labels:
+    app: openclaw
+    app.kubernetes.io/component: a2a-bridge
+data:
+  a2a-bridge.js: |
+    'use strict';
+    const http = require('http');
+    const crypto = require('crypto');
+
+    const PORT = 8080;
+    const OPENCLAW_HOST = '127.0.0.1';
+    const OPENCLAW_PORT = 18789;
+    const TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+    const AGENT_NAME = process.env.AGENT_NAME || 'openclaw';
+    const AGENT_DESCRIPTION = process.env.AGENT_DESCRIPTION || 'OpenClaw AI Agent Gateway';
+    const DEFAULT_MODEL = process.env.DEFAULT_AGENT_MODEL || 'nerc/openai/gpt-oss-20b';
+
+    // Read OpenClaw config to populate skills from agents.list[]
+    let skills = [
+      {
+        id: 'chat',
+        name: 'General Chat',
+        description: 'Chat with the default OpenClaw agent',
+        examples: ['Hello, what can you help me with?']
+      }
+    ];
+
+    try {
+      const fs = require('fs');
+      const configPath = '/home/node/.openclaw/openclaw.json';
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const agents = config.agents?.list || [];
+        if (agents.length > 0) {
+          skills = agents.map(agent => ({
+            id: agent.id || 'unknown',
+            name: agent.name || agent.id || 'Agent',
+            description: `Chat with ${agent.name || agent.id}`,
+            examples: [`Hello ${agent.name || agent.id}, what can you help me with?`]
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('Could not read OpenClaw config for skills:', err.message);
+    }
+
+    const AGENT_CARD = {
+      name: AGENT_NAME,
+      description: AGENT_DESCRIPTION,
+      version: '1.0.0',
+      url: `http://openclaw.${process.env.POD_NAMESPACE || 'openclaw'}.svc.cluster.local:${PORT}`,
+      capabilities: { streaming: false },
+      skills: skills
+    };
+
+    function readBody(req) {
+      return new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+        req.on('error', reject);
+      });
+    }
+
+    function openclawRequest(path, method, body, headers) {
+      return new Promise((resolve, reject) => {
+        const req = http.request({
+          hostname: OPENCLAW_HOST,
+          port: OPENCLAW_PORT,
+          path: path,
+          method: method,
+          headers: headers
+        }, (res) => {
+          const chunks = [];
+          res.on('data', chunk => chunks.push(chunk));
+          res.on('end', () => {
+            const data = Buffer.concat(chunks).toString();
+            try {
+              resolve({ status: res.statusCode, body: JSON.parse(data) });
+            } catch {
+              resolve({ status: res.statusCode, body: data });
+            }
+          });
+        });
+        req.on('error', reject);
+        if (body) req.write(body);
+        req.end();
+      });
+    }
+
+    async function handleA2AMessage(a2aRequest, authHeader) {
+      // Extract message text from A2A parts
+      const parts = a2aRequest.params?.message?.parts || [];
+      const text = parts
+        .filter(p => p.kind === 'text' || (typeof p.text === 'string'))
+        .map(p => p.text)
+        .join('\n');
+
+      if (!text) {
+        return {
+          jsonrpc: '2.0',
+          id: a2aRequest.id,
+          error: { code: -32602, message: 'No text content in message parts' }
+        };
+      }
+
+      // Translate to OpenAI chat completions
+      const openaiPayload = JSON.stringify({
+        model: DEFAULT_MODEL,
+        messages: [{ role: 'user', content: text }],
+        stream: false
+      });
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(openaiPayload)
+      };
+      if (TOKEN) {
+        headers['Authorization'] = `Bearer ${TOKEN}`;
+      }
+
+      const result = await openclawRequest(
+        '/v1/chat/completions', 'POST', openaiPayload, headers
+      );
+
+      if (result.status !== 200) {
+        console.error('OpenClaw returned', result.status, result.body);
+        return {
+          jsonrpc: '2.0',
+          id: a2aRequest.id,
+          error: { code: -32603, message: `OpenClaw error: ${result.status}` }
+        };
+      }
+
+      // Extract assistant response
+      const content = result.body?.choices?.[0]?.message?.content || 'No response from agent';
+
+      return {
+        jsonrpc: '2.0',
+        id: a2aRequest.id,
+        result: {
+          id: crypto.randomUUID(),
+          status: {
+            state: 'COMPLETED',
+            message: {
+              role: 'agent',
+              parts: [{ kind: 'text', text: content }],
+              messageId: crypto.randomUUID()
+            }
+          }
+        }
+      };
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+
+      // Agent card discovery
+      if (req.method === 'GET' && (url.pathname === '/.well-known/agent-card.json' || url.pathname === '/.well-known/agent.json')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(AGENT_CARD));
+        return;
+      }
+
+      // Health check
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', bridge: 'a2a' }));
+        return;
+      }
+
+      // A2A JSON-RPC endpoint
+      if (req.method === 'POST' && (url.pathname === '/' || url.pathname === '/a2a')) {
+        try {
+          const body = await readBody(req);
+          const a2aRequest = JSON.parse(body);
+
+          if (a2aRequest.method === 'message/send') {
+            const authHeader = req.headers['authorization'];
+            const response = await handleA2AMessage(a2aRequest, authHeader);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(response));
+          } else if (a2aRequest.method === 'message/stream') {
+            // For now, handle streaming as non-streaming and return complete response
+            const authHeader = req.headers['authorization'];
+            const response = await handleA2AMessage(a2aRequest, authHeader);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(response));
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              id: a2aRequest.id,
+              error: { code: -32601, message: `Method not supported: ${a2aRequest.method}` }
+            }));
+          }
+        } catch (err) {
+          console.error('A2A bridge error:', err);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: err.message }
+          }));
+        }
+        return;
+      }
+
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    });
+
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`A2A bridge listening on 0.0.0.0:${PORT}`);
+      console.log(`Agent card: http://0.0.0.0:${PORT}/.well-known/agent-card.json`);
+      console.log(`Skills: ${skills.map(s => s.id).join(', ')}`);
+    });

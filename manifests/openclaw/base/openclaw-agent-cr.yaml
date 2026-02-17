@@ -1,0 +1,31 @@
+# Agent CR for Kagenti operator
+# Points to the existing OpenClaw deployment (not managed by Kagenti operator)
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: Agent
+metadata:
+  name: openclaw
+  namespace: openclaw
+  labels:
+    app: openclaw
+    app.kubernetes.io/name: openclaw
+    kagenti.io/type: agent
+    kagenti.io/protocol: a2a
+    kagenti.io/framework: OpenClaw
+spec:
+  replicas: 1
+  imageSource:
+    image: quay.io/sallyom/openclaw:latest
+  servicePorts:
+  - name: a2a
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  podTemplateSpec:
+    spec:
+      serviceAccountName: openclaw-oauth-proxy
+      containers:
+      - name: gateway
+        image: quay.io/sallyom/openclaw:latest
+        ports:
+        - containerPort: 8080
+          protocol: TCP

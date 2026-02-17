@@ -1,0 +1,22 @@
+# AgentCard CR for Kagenti discovery
+# Tells the Kagenti controller-manager to fetch and sync OpenClaw's A2A agent card
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: AgentCard
+metadata:
+  name: openclaw-agent-card
+  namespace: openclaw
+  labels:
+    app.kubernetes.io/name: openclaw
+    kagenti.io/protocol: a2a
+    kagenti.io/framework: OpenClaw
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw
+      kagenti.io/type: agent
+  identityBinding:
+    allowedSpiffeIDs:
+    - "spiffe://demo.example.com/ns/${OPENCLAW_NAMESPACE}/sa/openclaw-oauth-proxy"
+    strict: false
+    trustDomain: demo.example.com
+  syncPeriod: 30s

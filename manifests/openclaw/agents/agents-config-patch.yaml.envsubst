@@ -39,6 +39,11 @@ data:
         "controlUi": {
           "enabled": true,
           "dangerouslyDisableDeviceAuth": true
+        },
+        "http": {
+          "endpoints": {
+            "chatCompletions": {"enabled": true}
+          }
         }
       },
       "diagnostics": {
@@ -92,6 +97,13 @@ data:
           }
         }
       },
+      "skills": {
+        "load": {
+          "extraDirs": ["~/.openclaw/skills"],
+          "watch": true,
+          "watchDebounceMs": 1000
+        }
+      },
       "tools": {
         "allow": [
           "read",
@@ -139,12 +151,14 @@ data:
             "id": "${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}",
             "name": "${SHADOWMAN_DISPLAY_NAME}",
             "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}",
-            "model": {"primary": "${DEFAULT_AGENT_MODEL}"}
+            "model": {"primary": "${DEFAULT_AGENT_MODEL}"},
+            "subagents": {"allowAgents": ["*"]}
           },
           {
             "id": "${OPENCLAW_PREFIX}_resource_optimizer",
             "name": "${OPENCLAW_PREFIX}'s Resource Optimizer - Cost Analysis",
-            "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_resource_optimizer"
+            "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_resource_optimizer",
+            "subagents": {"allowAgents": ["*"]}
           }
         ]
       },

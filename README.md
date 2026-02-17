@@ -1,19 +1,30 @@
 # openclaw-k8s
 
-Deploy OpenClaw — an AI agent runtime platform — on OpenShift or vanilla Kubernetes. Each team member gets their own isolated namespace with uniquely prefixed agents.
+Deploy OpenClaw — an AI agent runtime platform — on OpenShift or vanilla Kubernetes. Each team member gets their own instance with a named agent. Agents communicate across namespaces using the [A2A protocol](https://github.com/google/A2A) with zero-trust authentication via SPIFFE and Keycloak.
 
 ## What This Deploys
 
 ```
-┌──────────────────────────────────────────────────┐
-│ OpenClaw Gateway (<prefix>-openclaw namespace)   │
-│ - AI agent runtime with per-agent workspaces     │
-│ - Control UI + WebChat                           │
-│ - 2 pre-built agents (customizable names)        │
-│ - Cron jobs for scheduled agent tasks            │
-│ - Full OpenTelemetry observability               │
-└──────────────────────────────────────────────────┘
+ Sally's Namespace                          Bob's Namespace
+ ┌──────────────────────────────┐          ┌──────────────────────────────┐
+ │  sally-openclaw              │          │  bob-openclaw                │
+ │                              │   A2A    │                              │
+ │  Agent: Lynx                 │◄────────►│  Agent: Shadowman            │
+ │  (sally_lynx)                │  JSON-RPC│  (bob_shadowman)             │
+ │                              │          │                              │
+ │  Gateway + A2A Bridge        │          │  Gateway + A2A Bridge        │
+ │  AuthBridge (SPIFFE + Envoy) │          │  AuthBridge (SPIFFE + Envoy) │
+ └──────────────────────────────┘          └──────────────────────────────┘
+          │                                          │
+          └──────────── Keycloak ────────────────────┘
+                    (token exchange)
 ```
+
+Each instance runs:
+- An AI agent with a customizable name (chosen during setup)
+- An A2A bridge sidecar for cross-instance communication
+- AuthBridge sidecars for transparent zero-trust identity (SPIFFE/Keycloak)
+- Control UI + WebChat on port 18789
 
 ## Quick Start
 
@@ -23,12 +34,14 @@ Deploy OpenClaw — an AI agent runtime platform — on OpenShift or vanilla Kub
 
 **OpenShift (default):**
 - `oc` CLI installed and logged in (`oc login`)
-- Cluster-admin access (for OAuthClient creation)
+- Cluster-admin access (for OAuthClient and SCC creation)
+- SPIRE + Keycloak infrastructure deployed (see [Cluster Prerequisites](docs/A2A-ARCHITECTURE.md#cluster-prerequisites))
 
 **Vanilla Kubernetes (minikube, kind, etc.):**
 - `kubectl` CLI installed with a valid kubeconfig
+- A2A works but without AuthBridge authentication
 
-### Step 1: Deploy Platform
+### Deploy
 
 ```bash
 # OpenShift (default)
@@ -38,94 +51,100 @@ Deploy OpenClaw — an AI agent runtime platform — on OpenShift or vanilla Kub
 ./scripts/setup.sh --k8s
 ```
 
-The script will:
-- Prompt for a **namespace prefix** (e.g., `sally`) — creates `sally-openclaw` namespace
-- Auto-detect your cluster domain (OpenShift) or skip routes (K8s)
-- Prompt for an Anthropic API key (optional, for agents using Claude)
-- Generate all other secrets into `.env` (git-ignored)
-- Run `envsubst` on `.envsubst` templates to produce deployment YAML
-- Create OAuthClients for web UI authentication (OpenShift only)
+The script will prompt for:
+- **Namespace prefix** (e.g., `sally`) — creates `sally-openclaw` namespace
+- **Agent name** (e.g., `Lynx`) — this is who your teammates see when communicating via A2A
+- **Anthropic API key** (optional — without it, agents use the in-cluster model)
 
-### Step 2: Deploy Agents
+Then it generates secrets, deploys via kustomize, and installs the A2A skill.
 
-After OpenClaw is running:
-
+After deployment, grant the AuthBridge SCC (OpenShift only):
 ```bash
-# Wait for gateway to be ready
-oc rollout status deployment/openclaw -n <prefix>-openclaw --timeout=600s
-
-# Deploy agents
-./scripts/setup-agents.sh           # OpenShift
-./scripts/setup-agents.sh --k8s     # Kubernetes
+oc adm policy add-scc-to-user openclaw-authbridge \
+  -z openclaw-oauth-proxy -n <prefix>-openclaw
 ```
 
-The script will:
-- Prompt to **customize the default agent name** (or keep "Shadowman")
-- Install agent identity files (AGENTS.md, agent.json) into each workspace
-- Set up RBAC and cron jobs
-
-### Pre-Built Agents
-
-| Agent | Description | Schedule |
-|-------|-------------|----------|
-| `<prefix>_<custom_name>` | Interactive agent (default: Shadowman, customizable). Uses Anthropic Claude. | On-demand |
-| `<prefix>_resource_optimizer` | Analyzes K8s resource usage in `resource-demo` namespace | Daily at 8 AM UTC |
-
-The default agent name is customizable during `setup-agents.sh`. For example, entering "Lynx" creates agent ID `sally_lynx` with display name "Lynx". The choice is saved to `.env` for future re-runs.
-
-### Access Your Platform
+### Access
 
 **OpenShift** — URLs are displayed after `setup.sh` completes:
-
 ```
-OpenClaw Gateway:          https://openclaw-<prefix>-openclaw.apps.YOUR-CLUSTER.com
+OpenClaw Gateway:  https://openclaw-<prefix>-openclaw.apps.YOUR-CLUSTER.com
 ```
 
-The UI uses OpenShift OAuth login. On first visit, the Control UI will prompt you to paste the **Gateway Token** to connect. You can find it in your `.env` file:
-
+The UI uses OpenShift OAuth login. The Control UI will prompt for the **Gateway Token**:
 ```bash
 grep OPENCLAW_GATEWAY_TOKEN .env
 ```
 
 **Kubernetes** — Use port-forwarding:
-
 ```bash
 kubectl port-forward svc/openclaw 18789:18789 -n <prefix>-openclaw
 # Open http://localhost:18789
 ```
 
-### Verify Deployment
+### Verify
 
 ```bash
-# Replace <prefix> with your namespace prefix (e.g., sally)
+# Check pod is running (7 containers: gateway, a2a-bridge, oauth-proxy,
+# spiffe-helper, client-registration, envoy-proxy, otel-collector)
 oc get pods -n <prefix>-openclaw
+
+# Check agent card (A2A discovery)
+oc exec deployment/openclaw -c gateway -- \
+  curl -s http://localhost:8080/.well-known/agent.json | jq .
 ```
 
-**Expected pods:**
-- `openclaw-*` (1 replica, gateway + OTEL sidecar)
+## Cross-Namespace Agent Communication
 
-### Teardown
+This is the main demo feature. Once two or more team members have deployed their instances, agents can discover and message each other across namespaces.
+
+### How It Works
+
+1. Each pod runs an **A2A bridge** sidecar on port 8080 that translates [A2A JSON-RPC](https://github.com/google/A2A) to OpenClaw's internal API
+2. The **AuthBridge** (Envoy + SPIFFE + Keycloak) transparently authenticates every cross-namespace call — agents never handle tokens
+3. An **A2A skill** loaded into each agent teaches it how to discover and message remote instances
+
+### Example: Sally's Lynx Talks to Bob's Shadowman
+
+Lynx discovers the local agents and the remote Shadowman on Bob's instance, sends a message via A2A, and relays the response — all with zero-trust authentication handled transparently by the AuthBridge:
+
+![Lynx communicating with Shadowman across namespaces via A2A](images/a2a.png)
+
+Every cross-namespace call is traced end-to-end via OpenTelemetry, with full GenAI semantic conventions (token counts, model, latency):
+
+![OTEL trace of a cross-namespace A2A call in MLflow](images/a2a-trace.png)
+
+### Security Model
+
+- Each instance gets a unique SPIFFE identity: `spiffe://demo.example.com/ns/<namespace>/sa/openclaw-oauth-proxy`
+- Outbound calls: Envoy intercepts, exchanges SPIFFE JWT for Keycloak OAuth token, injects into request
+- Inbound calls: Envoy validates caller's OAuth token before forwarding to A2A bridge
+- Gateway container is fully hardened: read-only FS, all capabilities dropped, no privilege escalation
+
+See [docs/A2A-ARCHITECTURE.md](docs/A2A-ARCHITECTURE.md) for the full architecture, message flow diagrams, pod component breakdown, and cluster prerequisites. See [docs/A2A-SECURITY.md](docs/A2A-SECURITY.md) for the identity vs. content security model, audit trail, and DLP roadmap.
+
+## Additional Agents
+
+Beyond the default interactive agent, you can deploy additional agents with specialized capabilities:
 
 ```bash
-# Full teardown (removes namespace, OAuthClients, PVCs)
-./scripts/teardown.sh
-
-# Options:
-./scripts/teardown.sh --k8s              # Kubernetes mode
-./scripts/teardown.sh --delete-env       # Also delete .env file
+./scripts/setup-agents.sh           # OpenShift
+./scripts/setup-agents.sh --k8s     # Kubernetes
 ```
 
-The teardown script reads `.env` for namespace configuration. If `.env` is missing, set `OPENCLAW_NAMESPACE` manually:
+This adds a **Resource Optimizer** agent with K8s RBAC, CronJobs, and scheduled analysis. See [docs/ADDITIONAL-AGENTS.md](docs/ADDITIONAL-AGENTS.md) for details.
+
+## Teardown
 
 ```bash
-OPENCLAW_NAMESPACE=sally-openclaw ./scripts/teardown.sh
+./scripts/teardown.sh                   # OpenShift
+./scripts/teardown.sh --k8s             # Kubernetes
+./scripts/teardown.sh --delete-env      # Also delete .env file
 ```
 
 ## Configuration Management
 
-OpenClaw's config (`openclaw.json`) can be edited through the Control UI or directly in the manifests. Understanding how config flows between these layers is important to avoid losing changes.
-
-### How Config Flows
+OpenClaw's config (`openclaw.json`) can be edited through the Control UI or directly in the manifests.
 
 ```
 .envsubst template          ConfigMap              PVC (live config)
@@ -134,182 +153,81 @@ OpenClaw's config (`openclaw.json`) can be edited through the Control UI or dire
                           envsubst + deploy       on every pod restart
 ```
 
-1. **Source of truth**: `manifests/openclaw/overlays/openshift/config-patch.yaml.envsubst` (or the `k8s/` equivalent)
-2. **Deploy**: `setup.sh` runs `envsubst` to produce the ConfigMap YAML and applies it
-3. **Pod startup**: The init container copies `openclaw.json` from the ConfigMap mount to the PVC **on every restart**
-4. **Runtime**: OpenClaw reads config from the PVC. UI settings changes write to the PVC.
-
-**The catch**: UI changes live only on the PVC. The next pod restart (deploy, rollout, node eviction) overwrites the PVC config with whatever is in the ConfigMap. Export your changes before that happens.
-
-### Exporting Live Config
-
-If you've made changes through the OpenClaw Control UI (settings, model config, tool permissions, etc.), export the live config before it gets overwritten:
+The init container overwrites config on every pod restart. UI changes live only on the PVC. Export before restarting:
 
 ```bash
-# Export to default file (openclaw-config-export.json)
-./scripts/export-config.sh
-
-# Export with custom output path
-./scripts/export-config.sh -o my-config.json
-
-# Kubernetes mode
-./scripts/export-config.sh --k8s
+./scripts/export-config.sh              # Export live config
+./scripts/export-config.sh -o out.json  # Custom output path
 ```
 
-### Syncing Changes Back to Manifests
-
-After exporting, update the `.envsubst` template so the changes survive future deploys:
-
-```bash
-# 1. Export live config
-./scripts/export-config.sh
-
-# 2. Compare against the current template
-diff <(python3 -m json.tool openclaw-config-export.json) \
-     <(python3 -m json.tool manifests/openclaw/overlays/openshift/config-patch.yaml.envsubst)
-
-# 3. Edit the .envsubst template with the changes
-#    - Copy the new/changed sections from the export
-#    - Replace concrete values with ${VAR} placeholders where needed
-vi manifests/openclaw/overlays/openshift/config-patch.yaml.envsubst
-
-# 4. Redeploy to apply (generates new ConfigMap from template)
-./scripts/setup.sh
-```
-
-**What to replace with placeholders**: Any value that varies per deployment or contains secrets. Common substitutions:
-
-| Exported value | Replace with |
-|---------------|-------------|
-| `sallyom` (your prefix) | `${OPENCLAW_PREFIX}` |
-| `sallyom-openclaw` | `${OPENCLAW_NAMESPACE}` |
-| `apps.mycluster.com` | `${CLUSTER_DOMAIN}` |
-| Agent custom name (e.g., `lynx`) | `${SHADOWMAN_CUSTOM_NAME}` |
-| Agent display name (e.g., `Lynx`) | `${SHADOWMAN_DISPLAY_NAME}` |
-
-Everything else (model IDs, tool settings, port numbers, etc.) can stay as literal values.
-
-### Recommended Workflow
-
-For day-to-day config changes:
-
-1. **Quick iteration**: Change settings in the UI, test immediately
-2. **Before you're done**: Run `./scripts/export-config.sh` to capture your changes
-3. **Persist**: Update the `.envsubst` template and commit to Git
-4. **Redeploy anytime**: `setup.sh` reproduces the exact config from templates + `.env`
+See the `.envsubst` templates in `manifests/openclaw/overlays/` for the full config structure.
 
 ## Repository Structure
 
 ```
 openclaw-k8s/
 ├── scripts/
-│   ├── setup.sh                # Step 1: Deploy OpenClaw gateway
-│   ├── setup-agents.sh         # Step 2: Deploy agents, RBAC, cron jobs
-│   ├── update-jobs.sh          # Update cron jobs + report script (quick iteration)
+│   ├── setup.sh                # Deploy OpenClaw + A2A skill
+│   ├── setup-agents.sh         # Deploy additional agents (resource-optimizer)
+│   ├── update-jobs.sh          # Update cron jobs (quick iteration)
 │   ├── export-config.sh        # Export live config from running pod
 │   ├── teardown.sh             # Remove everything
 │   └── build-and-push.sh      # Build images with podman (optional)
 │
-├── .env                        # Generated secrets (GIT-IGNORED)
-│
 ├── manifests/
 │   └── openclaw/
-│       ├── base/               # Core resources (deployment, service, PVCs)
-│       ├── base-k8s/           # Kubernetes-specific base (no Routes/OAuth)
+│       ├── base/               # Core: deployment (7 containers), service, PVCs,
+│       │                       #   A2A bridge, AuthBridge, custom SCC
 │       ├── overlays/
 │       │   ├── openshift/      # OpenShift overlay (secrets, config, OAuth, routes)
 │       │   └── k8s/            # Vanilla Kubernetes overlay
-│       ├── agents/             # Agent configs, RBAC, cron jobs
-│       │   ├── shadowman/      # Default agent (customizable name)
-│       │   ├── resource-optimizer/  # Resource analysis agent + CronJob
-│       │   ├── audit-reporter/     # Compliance monitoring (future)
-│       │   └── mlops-monitor/      # ML operations tracking (future)
+│       ├── agents/             # Additional agent configs, RBAC, cron jobs
+│       ├── skills/             # Reusable agent skills (A2A communication)
 │       └── llm/                # vLLM reference deployment (GPU model server)
 │
 ├── observability/              # OTEL sidecar and collector templates
-│   ├── openclaw-otel-sidecar.yaml.envsubst
-│   └── vllm-otel-sidecar.yaml.envsubst
 │
 └── docs/
-    ├── ARCHITECTURE.md
-    ├── TEAMMATE-QUICKSTART.md
-    ├── OBSERVABILITY.md
-    └── k8s-deployment-guide.md
+    ├── ARCHITECTURE.md         # Overall architecture
+    ├── A2A-ARCHITECTURE.md     # A2A + AuthBridge deep dive
+    ├── A2A-SECURITY.md         # Identity vs. content security, audit, DLP roadmap
+    ├── ADDITIONAL-AGENTS.md    # Resource-optimizer, cron jobs, RBAC
+    ├── OBSERVABILITY.md        # OpenTelemetry + MLflow
+    └── TEAMMATE-QUICKSTART.md  # Quick onboarding guide
 ```
 
-**Key Patterns:**
-- `.envsubst` files = Templates with `${VAR}` placeholders (committed to Git)
-- `.env` file = Generated secrets (git-ignored, created by `setup.sh`)
-- `setup.sh` runs `envsubst` on all templates, then deploys via kustomize overlays
-- `setup-agents.sh` runs `envsubst` on agent templates only, then configures agents
+## Security
 
-## Multi-User Support
+The gateway container runs with enterprise security hardening:
 
-Each team member deploys their own OpenClaw instance with a unique namespace prefix:
+- Read-only root filesystem, all capabilities dropped, no privilege escalation
+- Custom `openclaw-authbridge` SCC grants only AuthBridge sidecar capabilities (NET_ADMIN, NET_RAW, spc_t)
+- ResourceQuota, PodDisruptionBudget, NetworkPolicy
+- Token-based gateway auth + OAuth proxy (OpenShift)
+- Exec allowlist mode (only `curl` and `jq` permitted)
+- SPIFFE workload identity per namespace (cryptographic, auditable)
 
-```
-alice-openclaw    # Alice's agents: alice_lynx, alice_resource_optimizer
-bob-openclaw      # Bob's agents: bob_shadowman, bob_resource_optimizer
-```
-
-Namespaces are fully isolated. Each team member runs their own `setup.sh` with a different prefix.
-
-## System Requirements
-
-**Required:**
-- OpenShift 4.12+ with cluster-admin, **or** vanilla Kubernetes (minikube, kind, etc.)
-- `oc` or `kubectl` CLI installed
-
-**Optional:**
-- Anthropic API key (for agents using Claude models; without it, agents use in-cluster models only)
-- OpenTelemetry Operator (for observability — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md))
-- Podman (only if building custom images)
-
-## OpenShift Compliance
-
-All manifests are OpenShift `restricted` SCC compliant:
-
-- No root containers (arbitrary UIDs)
-- No privileged mode
-- Drop all capabilities
-- Non-privileged ports only
-- ReadOnlyRootFilesystem support
-- ResourceQuota (namespace limits: 4 CPU, 8Gi RAM)
-- PodDisruptionBudget (high availability)
-- NetworkPolicy (network isolation)
-
-See [docs/OPENSHIFT-SECURITY-FIXES.md](docs/OPENSHIFT-SECURITY-FIXES.md) for details.
-
-### Security Configuration
-
-- **Auth mode**: `token` — requires `OPENCLAW_GATEWAY_TOKEN` for API access
-- **Exec security**: `allowlist` mode — only `curl` and `jq` are permitted
-- **Tool deny list**: `browser`, `canvas`, `nodes`, `process`, `tts`, `web_fetch`, `gateway` are blocked
-- **OAuth proxy**: OpenShift deployments use OAuth for web UI authentication
+See [docs/A2A-ARCHITECTURE.md](docs/A2A-ARCHITECTURE.md) for the custom SCC rationale and [docs/OPENSHIFT-SECURITY-FIXES.md](docs/OPENSHIFT-SECURITY-FIXES.md) for the full security posture.
 
 ## Troubleshooting
 
-**Setup script fails with "not logged in to OpenShift":**
-- Run `oc login https://api.YOUR-CLUSTER:6443` first
+**Pod not starting (SCC issues):**
+- Grant the custom SCC: `oc adm policy add-scc-to-user openclaw-authbridge -z openclaw-oauth-proxy -n <prefix>-openclaw`
 
-**OAuthClient creation fails:**
-- Requires cluster-admin role
-- Ask your cluster admin to run: `oc apply -f manifests/openclaw/overlays/openshift/oauthclient.yaml`
+**A2A bridge returning 401:**
+- Check SPIFFE helper has credentials: `oc exec deployment/openclaw -c spiffe-helper -- ls -la /opt/`
+- Check client registration completed: `oc logs deployment/openclaw -c client-registration`
 
-**OAuthClient 500 "unauthorized_client" after login:**
-- OpenShift can corrupt OAuthClient secret state on `oc apply`
-
-**Pods stuck in "CreateContainerConfigError":**
-- Check secrets exist: `oc get secrets -n <prefix>-openclaw`
-- Re-run `./scripts/setup.sh` if secrets are missing
+**Cross-namespace call failing:**
+- Verify SPIRE registration entry exists for the target namespace
+- Check Envoy logs: `oc logs deployment/openclaw -c envoy-proxy`
 
 **Agent not appearing in Control UI:**
 - Check config: `oc get configmap openclaw-config -n <prefix>-openclaw -o yaml`
 - Restart gateway: `oc rollout restart deployment/openclaw -n <prefix>-openclaw`
 
-**Agent workspace files missing or wrong:**
-- `setup-agents.sh` copies AGENTS.md and agent.json from ConfigMaps into each agent's workspace
-- Re-run `setup-agents.sh` to refresh
+**Setup script fails with "not logged in to OpenShift":**
+- Run `oc login https://api.YOUR-CLUSTER:6443` first
 
 ## License
 

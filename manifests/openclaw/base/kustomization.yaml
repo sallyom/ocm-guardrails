@@ -17,6 +17,17 @@ resources:
 # openclaw-networkpolicy.yaml  # TODO: Fix egress rules for OAuth proxy
 - openclaw-resourcequota.yaml
 - openclaw-poddisruptionbudget.yaml
+# Kagenti integration
+- a2a-bridge-configmap.yaml
+- authbridge-configmaps.yaml
+- authbridge-secret.yaml
+# Kagenti operator integration (disabled — see openclaw-agent-cr.yaml and openclaw-agentcard.yaml.envsubst)
+# The Kagenti operator's Agent CR takes over the Deployment lifecycle, overwriting our
+# env vars, volumes, and sidecars. Until the operator supports "unmanaged" agents,
+# we rely on the A2A bridge sidecar for protocol compatibility and SPIFFE/Keycloak
+# for identity — but skip operator-level discovery.
+# - openclaw-agent-cr.yaml
+# - openclaw-agentcard.yaml
 # Agent ConfigMaps (core deployment includes only shadowman)
 - shadowman-agent.yaml
 # Additional agents (resource-optimizer, etc.) are deployed via setup-agents.sh

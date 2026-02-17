@@ -1,0 +1,28 @@
+# RBAC grant for the openclaw-authbridge SCC
+# Declarative replacement for: oc adm policy add-scc-to-user openclaw-authbridge -z openclaw-oauth-proxy -n <ns>
+#
+# ClusterRole is shared across all OpenClaw instances.
+# ClusterRoleBinding is per-namespace (namespace in the name prevents collisions).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: use-openclaw-authbridge-scc
+rules:
+- apiGroups: ["security.openshift.io"]
+  resources: ["securitycontextconstraints"]
+  resourceNames: ["openclaw-authbridge"]
+  verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openclaw-authbridge-scc-${OPENCLAW_NAMESPACE}
+subjects:
+- kind: ServiceAccount
+  name: openclaw-oauth-proxy
+  namespace: ${OPENCLAW_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: use-openclaw-authbridge-scc

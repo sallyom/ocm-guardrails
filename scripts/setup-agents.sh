@@ -44,7 +44,7 @@ fi
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
@@ -118,6 +118,15 @@ if ! $KUBECTL get namespace "$OPENCLAW_NAMESPACE" &>/dev/null; then
   exit 1
 fi
 log_success "Connected to cluster, namespace exists"
+
+# Update namespace annotations with agent roster
+AGENT_LIST="${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME},${OPENCLAW_PREFIX}_resource_optimizer"
+$KUBECTL annotate namespace "$OPENCLAW_NAMESPACE" \
+  "openclaw.dev/agent-name=$SHADOWMAN_DISPLAY_NAME" \
+  "openclaw.dev/agent-id=${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}" \
+  "openclaw.dev/agents=$AGENT_LIST" \
+  --overwrite > /dev/null
+log_success "Namespace annotations updated (agents: $AGENT_LIST)"
 echo ""
 
 # Run envsubst on agent templates only
@@ -184,7 +193,7 @@ echo ""
 log_info "Restarting OpenClaw to load agents..."
 $KUBECTL rollout restart deployment/openclaw -n "$OPENCLAW_NAMESPACE"
 log_info "Waiting for OpenClaw to be ready..."
-$KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=120s
+$KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=300s
 log_success "OpenClaw ready"
 echo ""
 
@@ -234,7 +243,7 @@ echo ""
 # Restart gateway to load agent configs and report ConfigMap mount
 log_info "Restarting OpenClaw to load agents..."
 $KUBECTL rollout restart deployment/openclaw -n "$OPENCLAW_NAMESPACE"
-$KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=120s
+$KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=300s
 log_success "OpenClaw ready"
 echo ""
 
@@ -245,7 +254,7 @@ log_success "Cron jobs written"
 # Final restart to load cron jobs
 log_info "Final restart to load cron jobs..."
 $KUBECTL rollout restart deployment/openclaw -n "$OPENCLAW_NAMESPACE"
-$KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=120s
+$KUBECTL rollout status deployment/openclaw -n "$OPENCLAW_NAMESPACE" --timeout=300s
 log_success "OpenClaw ready with agents"
 echo ""
 

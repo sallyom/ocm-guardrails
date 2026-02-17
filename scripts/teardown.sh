@@ -11,6 +11,7 @@
 #
 # This script:
 #   - Reads .env for namespace and prefix configuration
+#   - Removes the auto-registered Keycloak client (SPIFFE ID)
 #   - Deletes all resources in namespace before deleting namespace
 #     (avoids finalizer hang during namespace deletion)
 #   - Removes cluster-scoped OAuthClients (OpenShift only)
@@ -45,7 +46,7 @@ fi
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
@@ -154,9 +155,57 @@ teardown_namespace() {
   echo ""
 }
 
+# Remove Keycloak client (auto-registered by AuthBridge using SPIFFE ID)
+KEYCLOAK_URL="${KEYCLOAK_URL:-https://keycloak-spiffe-demo.apps.ocp-beta-test.nerc.mghpcc.org}"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-spiffe-demo}"
+KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_ADMIN_USERNAME:-admin}"
+KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin123}"
+SPIFFE_CLIENT_ID="spiffe://demo.example.com/ns/${OPENCLAW_NAMESPACE}/sa/openclaw-oauth-proxy"
+
+log_info "Removing Keycloak client for $OPENCLAW_NAMESPACE..."
+
+# Get admin token
+KC_TOKEN=$(curl -s -X POST \
+  "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+  -d "grant_type=client_credentials&client_id=admin-cli" \
+  -d "grant_type=password&username=${KEYCLOAK_ADMIN_USERNAME}&password=${KEYCLOAK_ADMIN_PASSWORD}" \
+  -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null | jq -r '.access_token // empty')
+
+if [ -n "$KC_TOKEN" ]; then
+  # URL-encode the SPIFFE ID (contains :// and /)
+  ENCODED_CLIENT_ID=$(printf '%s' "$SPIFFE_CLIENT_ID" | jq -sRr @uri)
+
+  # Look up the client by clientId
+  KC_CLIENT_UUID=$(curl -s \
+    "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${ENCODED_CLIENT_ID}" \
+    -H "Authorization: Bearer ${KC_TOKEN}" 2>/dev/null | jq -r '.[0].id // empty')
+
+  if [ -n "$KC_CLIENT_UUID" ]; then
+    if curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+      "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${KC_CLIENT_UUID}" \
+      -H "Authorization: Bearer ${KC_TOKEN}" 2>/dev/null | grep -q "204"; then
+      log_success "Keycloak client deleted: $SPIFFE_CLIENT_ID"
+    else
+      log_warn "Failed to delete Keycloak client (may need manual cleanup)"
+    fi
+  else
+    log_warn "Keycloak client not found: $SPIFFE_CLIENT_ID (already removed or never registered)"
+  fi
+else
+  log_warn "Could not authenticate to Keycloak — skipping client cleanup"
+  log_warn "  Manually remove client: $SPIFFE_CLIENT_ID"
+  log_warn "  From realm: ${KEYCLOAK_REALM} at ${KEYCLOAK_URL}"
+fi
+echo ""
+
 # Teardown OpenClaw
-# Remove cluster-scoped OAuthClient (OpenShift only)
+# Remove cluster-scoped resources (OpenShift only)
 if ! $K8S_MODE; then
+  log_info "Removing SCC ClusterRoleBinding..."
+  $KUBECTL delete clusterrolebinding "openclaw-authbridge-scc-${OPENCLAW_NAMESPACE}" 2>/dev/null && \
+    log_success "ClusterRoleBinding openclaw-authbridge-scc-${OPENCLAW_NAMESPACE} deleted" || \
+    log_warn "ClusterRoleBinding not found (already removed)"
+
   log_info "Removing OpenClaw OAuthClient..."
   $KUBECTL delete oauthclient "$OPENCLAW_NAMESPACE" 2>/dev/null && \
     log_success "OAuthClient $OPENCLAW_NAMESPACE deleted" || \

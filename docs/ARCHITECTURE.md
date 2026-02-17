@@ -13,41 +13,43 @@ OpenClaw is an AI agent runtime platform. This repo deploys it on Kubernetes (Op
     │
     ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  OpenClaw Gateway (Namespace: <prefix>-openclaw)                │
+│  OpenClaw Pod (Namespace: <prefix>-openclaw)                    │
 │                                                                 │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │  Agent Runtime Environment                                 │  │
-│  │                                                            │  │
+│  │  Agent Runtime                                             │  │
 │  │  ┌────────────────────┐     ┌────────────────────┐         │  │
-│  │  │  Shadowman         │     │  Resource Optimizer │         │  │
-│  │  │  (customizable)    │     │                    │         │  │
-│  │  │                    │     │  Model:            │         │  │
-│  │  │  Model:            │     │  In-cluster (20B)  │         │  │
-│  │  │  Anthropic Claude  │     │                    │         │  │
-│  │  │                    │     │  Schedule:         │         │  │
-│  │  │  Workspace:        │     │  Daily 8 AM UTC    │         │  │
-│  │  │  /workspace-<id>   │     │  (CronJob + cron)  │         │  │
+│  │  │  Shadowman/Lynx    │     │  Resource Optimizer │         │  │
+│  │  │  (customizable)    │     │  Schedule: CronJob  │         │  │
+│  │  │  Model: configurable│    │  Model: in-cluster  │         │  │
 │  │  └────────────────────┘     └────────────────────┘         │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                 │
-│  ┌──────────────────┐         ┌──────────────────────────────┐  │
-│  │  Gateway         │  OTLP   │  OTEL Collector Sidecar      │  │
-│  │  Container       │──────►  │  (auto-injected)             │  │
-│  │  (port 18789)    │  :4318  │  Exports to MLflow           │  │
-│  └──────────────────┘         └──────────────────────────────┘  │
+│  ┌──────────────┐ ┌────────────┐ ┌────────────────────────────┐ │
+│  │  Gateway     │ │ A2A Bridge │ │  OTEL Collector Sidecar    │ │
+│  │  :18789      │ │ :8080      │ │  (auto-injected)           │ │
+│  └──────────────┘ └────────────┘ └────────────────────────────┘ │
+│                                                                 │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  AuthBridge (transparent zero-trust)                       │  │
+│  │  ┌───────────┐ ┌─────────────────┐ ┌────────────────────┐ │  │
+│  │  │  Envoy    │ │ Client          │ │ SPIFFE Helper      │ │  │
+│  │  │  Proxy    │ │ Registration    │ │ (SPIRE CSI)        │ │  │
+│  │  └───────────┘ └─────────────────┘ └────────────────────┘ │  │
+│  └────────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │  Sessions stored on PVC                                         │
 │  Config: openclaw.json (ConfigMap → PVC)                        │
-└─────────────────────────────────────────────────────────────────┘
-          │
-          ▼ LLM API calls
-┌──────────────────────────────┐
-│  Model Providers             │
-│  - Anthropic API             │
-│  - Google Vertex AI          │
-│  - In-cluster vLLM           │
-│  - Any OpenAI-compatible     │
-└──────────────────────────────┘
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+         ┌───────────┼───────────────┐
+         ▼           ▼               ▼
+┌──────────────┐ ┌────────────┐ ┌─────────────────┐
+│ Model        │ │ Other      │ │ Keycloak        │
+│ Providers    │ │ OpenClaw   │ │ (SPIFFE realm)  │
+│ - Anthropic  │ │ Instances  │ │                 │
+│ - Vertex AI  │ │ (via A2A)  │ │ Token exchange  │
+│ - vLLM       │ │            │ │ + validation    │
+└──────────────┘ └────────────┘ └─────────────────┘
 ```
 
 ## Key Components
@@ -81,12 +83,22 @@ The init container overwrites `openclaw.json` on every pod restart. UI changes l
 
 See [OBSERVABILITY.md](OBSERVABILITY.md) for details.
 
+### A2A Cross-Namespace Communication
+- A2A bridge sidecar translates Google A2A JSON-RPC to OpenClaw's OpenAI-compatible API
+- AuthBridge (Envoy + SPIFFE + Keycloak) provides transparent zero-trust authentication
+- Agent cards served at `/.well-known/agent.json` for discovery
+- A2A skill teaches agents to discover and message remote instances using `curl` + `jq`
+
+See [A2A-ARCHITECTURE.md](A2A-ARCHITECTURE.md) for the full design, message flow, and security model.
+
 ### Security
-- OpenShift `restricted` SCC compliant (non-root, dropped capabilities, read-only root FS)
+- Custom `openclaw-authbridge` SCC grants only AuthBridge capabilities (NET_ADMIN, NET_RAW, spc_t, CSI)
+- Gateway container fully hardened: read-only root FS, all caps dropped, no privilege escalation
 - ResourceQuota, PodDisruptionBudget, NetworkPolicy
 - Token-based gateway auth + OAuth proxy (OpenShift)
 - Exec allowlist mode (only `curl`, `jq` permitted)
 - Per-agent tool allow/deny policies
+- SPIFFE workload identity per namespace (cryptographic, auditable)
 
 ## Deployment Flow
 
@@ -96,10 +108,14 @@ See [OBSERVABILITY.md](OBSERVABILITY.md) for details.
    ├── Generate secrets → .env
    ├── envsubst on all .envsubst templates
    ├── Create namespace
-   ├── Deploy via kustomize overlay
-   └── Create OAuthClient (OpenShift only)
+   ├── Deploy via kustomize overlay (includes AuthBridge sidecars)
+   ├── Create OAuthClient (OpenShift only)
+   └── Install A2A skill into agent workspace
 
-2. setup-agents.sh
+2. Grant SCC (OpenShift only)
+   └── oc adm policy add-scc-to-user openclaw-authbridge -z openclaw-oauth-proxy -n <ns>
+
+3. setup-agents.sh (optional)
    ├── Prompt for agent name customization
    ├── envsubst on agent templates
    ├── Deploy agent ConfigMaps
@@ -148,6 +164,8 @@ Resolution order: agent-specific `model` → `agents.defaults.model.primary` →
 │   ├── AGENTS.md
 │   ├── agent.json
 │   └── .env                               # OC_TOKEN (K8s SA token)
+├── skills/
+│   └── a2a/SKILL.md                       # A2A cross-instance communication skill
 ├── cron/jobs.json                         # Cron job definitions
 └── scripts/                               # Deployed scripts (resource-report.sh)
 ```

@@ -7,13 +7,21 @@ metadata:
   namespace: openclaw
   labels:
     app: openclaw
+    kagenti.io/type: agent
+    kagenti.io/protocol: a2a
+    app.kubernetes.io/name: openclaw
   annotations:
     service.beta.openshift.io/serving-cert-secret-name: openclaw-proxy-tls
+    kagenti.io/description: "OpenClaw AI Agent Gateway"
 spec:
   type: ClusterIP
   selector:
     app: openclaw
   ports:
+  - name: a2a
+    port: 8080
+    targetPort: a2a
+    protocol: TCP
   - name: oauth-ui
     port: 8443
     targetPort: oauth-ui

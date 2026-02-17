@@ -1,0 +1,57 @@
+# Custom SCC for OpenClaw + AuthBridge
+# Grants only the specific capabilities needed for SPIFFE/Envoy sidecar pattern
+# while preserving OpenShift's namespace UID assignment (MustRunAsRange)
+#
+# Why not privileged? This SCC documents exactly what's needed:
+#   - NET_ADMIN/NET_RAW: proxy-init iptables rules (transparent interception)
+#   - spc_t SELinux: SPIRE CSI volume access
+#   - CSI volumes: SPIRE agent socket
+#   - RunAsAny users: proxy-init (root), envoy (1337)
+#
+# The gateway container itself still runs as the namespace-assigned UID
+# with readOnlyRootFilesystem, no privilege escalation, and all caps dropped.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: openclaw-authbridge
+  annotations:
+    kubernetes.io/description: >-
+      Custom SCC for OpenClaw with AuthBridge sidecars.
+      Allows SPIFFE CSI, iptables init, and Envoy proxy
+      while preserving namespace UID assignment.
+# Run as any user (needed for proxy-init=0, envoy=1337, gateway=namespace UID)
+runAsUser:
+  type: RunAsAny
+# Namespace GID range still applies
+fsGroup:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+# Capabilities
+allowedCapabilities:
+  - NET_ADMIN
+  - NET_RAW
+defaultAddCapabilities: []
+requiredDropCapabilities: []
+# Volumes
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+  - csi
+# Filesystem
+readOnlyRootFilesystem: false
+# Privilege
+allowPrivilegedContainer: false
+allowPrivilegeEscalation: true
+# Host access (none needed)
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
