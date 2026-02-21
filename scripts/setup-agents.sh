@@ -70,6 +70,15 @@ set -a
 source "$REPO_ROOT/.env"
 set +a
 
+# Source .env.a2a for cluster-level A2A config (Keycloak, SPIRE settings)
+# Written by manifests/a2a-infra/setup-a2a-infra.sh — survives .env wipes
+if [ -f "$REPO_ROOT/.env.a2a" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env.a2a"
+  set +a
+fi
+
 # Validate required vars
 for var in OPENCLAW_PREFIX OPENCLAW_NAMESPACE; do
   if [ -z "${!var:-}" ]; then
@@ -355,8 +364,8 @@ echo ""
 echo "Cron jobs:"
 for job_file in "$REPO_ROOT/manifests/openclaw/agents"/*/JOB.md; do
   [ -f "$job_file" ] || continue
-  job_id=$(sed -n '/^---$/,/^---$/{ /^id:/{ s/^id: *//; p; } }' "$job_file" | head -1)
-  schedule=$(sed -n '/^---$/,/^---$/{ /^schedule:/{ s/^schedule: *"*//; s/"*$//; p; } }' "$job_file" | head -1)
+  job_id=$(grep '^id:' "$job_file" | head -1 | sed 's/^id: *//')
+  schedule=$(grep '^schedule:' "$job_file" | head -1 | sed 's/^schedule: *"*//; s/"*$//')
   echo "  ${job_id}: ${schedule}"
 done
 echo ""

@@ -162,6 +162,15 @@ if [ -f "$REPO_ROOT/.env" ]; then
   _ENV_REUSE=true
 fi
 
+# Source .env.a2a for cluster-level A2A config (Keycloak, SPIRE settings)
+# Written by manifests/a2a-infra/setup-a2a-infra.sh — survives .env wipes
+if [ -f "$REPO_ROOT/.env.a2a" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env.a2a"
+  set +a
+fi
+
 # Prompt for OpenClaw namespace prefix (skip if already set from local .env)
 if $_ENV_REUSE && [ -n "${OPENCLAW_PREFIX:-}" ]; then
   OPENCLAW_NAMESPACE="${OPENCLAW_PREFIX}-openclaw"
@@ -313,23 +322,32 @@ else
 
   # Prompt for Keycloak config (only when --with-a2a is set)
   if [ "$A2A_ENABLED" = "true" ]; then
-    log_info "A2A AuthBridge requires a Keycloak instance for token exchange."
-    read -p "  Keycloak URL (e.g., https://keycloak.apps.mycluster.com): " KEYCLOAK_URL
-    if [ -z "$KEYCLOAK_URL" ]; then
-      log_error "Keycloak URL is required for A2A AuthBridge"
-      exit 1
+    # Use values from .env.a2a if available, otherwise prompt
+    if [ -n "${KEYCLOAK_URL:-}" ] && [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ]; then
+      log_info "Using Keycloak config from .env.a2a"
+      KEYCLOAK_REALM="${KEYCLOAK_REALM:-spiffe-openclaw}"
+      KEYCLOAK_ADMIN_USERNAME="${KEYCLOAK_ADMIN_USERNAME:-admin}"
+      log_success "Keycloak: $KEYCLOAK_URL realm=$KEYCLOAK_REALM"
+    else
+      log_info "A2A AuthBridge requires a Keycloak instance for token exchange."
+      log_info "(Tip: run manifests/a2a-infra/setup-a2a-infra.sh first to save these in .env.a2a)"
+      read -p "  Keycloak URL (e.g., https://keycloak.apps.mycluster.com): " KEYCLOAK_URL
+      if [ -z "$KEYCLOAK_URL" ]; then
+        log_error "Keycloak URL is required for A2A AuthBridge"
+        exit 1
+      fi
+      read -p "  Keycloak realm [spiffe-openclaw]: " KEYCLOAK_REALM
+      KEYCLOAK_REALM=${KEYCLOAK_REALM:-spiffe-openclaw}
+      read -p "  Keycloak admin username [admin]: " KEYCLOAK_ADMIN_USERNAME
+      KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USERNAME:-admin}
+      read -sp "  Keycloak admin password: " KEYCLOAK_ADMIN_PASSWORD
+      echo
+      if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ]; then
+        log_error "Keycloak admin password is required"
+        exit 1
+      fi
+      log_success "Keycloak: $KEYCLOAK_URL realm=$KEYCLOAK_REALM"
     fi
-    read -p "  Keycloak realm [spiffe-demo]: " KEYCLOAK_REALM
-    KEYCLOAK_REALM=${KEYCLOAK_REALM:-spiffe-demo}
-    read -p "  Keycloak admin username [admin]: " KEYCLOAK_ADMIN_USERNAME
-    KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN_USERNAME:-admin}
-    read -sp "  Keycloak admin password: " KEYCLOAK_ADMIN_PASSWORD
-    echo
-    if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ]; then
-      log_error "Keycloak admin password is required"
-      exit 1
-    fi
-    log_success "Keycloak: $KEYCLOAK_URL realm=$KEYCLOAK_REALM"
   else
     KEYCLOAK_URL=""
     KEYCLOAK_REALM=""

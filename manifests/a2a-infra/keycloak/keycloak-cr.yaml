@@ -1,0 +1,30 @@
+# Keycloak instance managed by the RHBK operator.
+# Requires: rhbk-operator installed via OLM and PostgreSQL running.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  labels:
+    app: keycloak
+spec:
+  instances: 1
+  hostname:
+    hostname: REPLACE_KEYCLOAK_HOSTNAME
+  http:
+    httpEnabled: true
+  proxy:
+    headers: xforwarded
+  db:
+    vendor: postgres
+    host: keycloak-db
+    port: 5432
+    database: keycloak
+    usernameSecret:
+      name: keycloak-db-secret
+      key: POSTGRESQL_USER
+    passwordSecret:
+      name: keycloak-db-secret
+      key: POSTGRESQL_PASSWORD
+  # The RHBK operator auto-generates admin credentials in a
+  # secret named 'keycloak-initial-admin'. The setup script
+  # reads these after deployment.
