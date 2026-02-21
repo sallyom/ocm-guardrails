@@ -1,0 +1,14 @@
+---
+id: REPLACE_AGENT_ID-job
+schedule: "0 9 * * *"
+tz: UTC
+---
+
+Your job instructions go here. This is the message the agent receives
+when the scheduled job fires.
+
+Example: Read data, analyze it, and report findings.
+
+If you find issues worth flagging, send a brief summary to
+${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME} using sessions_send.
+If everything looks healthy, no message needed.

@@ -133,7 +133,17 @@ This adds:
 - **MLOps Monitor** — Monitors the NPS Agent's MLflow traces and evaluation results, reports anomalies
 - **NPS Skill** — Teaches the default agent to query the NPS Agent for national park information
 
-See [docs/ADDITIONAL-AGENTS.md](docs/ADDITIONAL-AGENTS.md) for details.
+### Create Your Own Agent
+
+Scaffold a new agent with one command:
+
+```bash
+./scripts/add-agent.sh
+```
+
+This creates the agent ConfigMap from a template and optionally adds a scheduled job via a `JOB.md` file. Jobs are standalone markdown files with a cron schedule in the frontmatter — no need to edit scripts or embed JSON.
+
+See [docs/TEAMMATE-QUICKSTART.md](docs/TEAMMATE-QUICKSTART.md) for the full walkthrough, and [manifests/openclaw/agents/_template/README.md](manifests/openclaw/agents/_template/README.md) for the template reference.
 
 ## NPS Agent
 

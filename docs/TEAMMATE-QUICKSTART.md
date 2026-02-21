@@ -90,77 +90,42 @@ oc adm policy add-scc-to-user openclaw-authbridge \
 
 See [A2A-ARCHITECTURE.md](A2A-ARCHITECTURE.md) for the full architecture.
 
-## Quick Iteration
+## Create Your Own Agent
 
-To update cron jobs or the resource-report script without a full re-deploy:
+Scaffold a new agent with one command:
+
+```bash
+./scripts/add-agent.sh
+```
+
+It prompts for an ID, display name, description, emoji, and color, then generates the agent files from a template. It also prints the JSON snippet to register the agent in the config.
+
+For the full template reference and manual setup, see [manifests/openclaw/agents/_template/README.md](../manifests/openclaw/agents/_template/README.md).
+
+## Add a Scheduled Job
+
+Give any agent a scheduled task by creating a `JOB.md` file in its directory:
+
+```markdown
+---
+id: myagent-daily-check
+schedule: "0 9 * * *"
+tz: UTC
+---
+
+Your job instructions here. This message is sent to the agent
+when the job fires.
+```
+
+Then deploy the job:
 
 ```bash
 ./scripts/update-jobs.sh           # OpenShift
 ./scripts/update-jobs.sh --k8s     # Kubernetes
 ```
 
----
-
-## Creating Your Own Custom Agent
-
-Use the existing agents as templates. You need two things: a ConfigMap and a config entry.
-
-### 1. Create the Agent ConfigMap
-
-Copy an existing agent and customize it. Save in its own directory as `manifests/openclaw/agents/myagent/myagent-agent.yaml`:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: myagent-agent
-  namespace: <prefix>-openclaw
-  labels:
-    app: openclaw
-    agent: myagent
-data:
-  AGENTS.md: |
-    ---
-    name: <prefix>_myagent
-    description: What your agent does
-    ---
-    # My Agent
-    Instructions for your agent go here.
-
-  agent.json: |
-    {
-      "name": "<prefix>_myagent",
-      "display_name": "My Agent",
-      "description": "What your agent does",
-      "capabilities": ["chat"],
-      "tags": ["custom"],
-      "version": "1.0.0"
-    }
-```
-
-### 2. Add the Agent to OpenClaw Config
-
-Edit `manifests/openclaw/agents/agents-config-patch.yaml.envsubst`. Add your agent to the `agents.list` array:
-
-```json
-{
-  "id": "${OPENCLAW_PREFIX}_myagent",
-  "name": "My Agent",
-  "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_myagent"
-}
-```
-
-### 3. Deploy
+Preview without deploying:
 
 ```bash
-# Apply ConfigMap
-oc apply -f manifests/openclaw/agents/myagent/myagent-agent.yaml
-
-# Apply updated config
-oc apply -f manifests/openclaw/agents/agents-config-patch.yaml
-
-# Restart OpenClaw to pick up the new agent
-oc rollout restart deployment/openclaw -n <prefix>-openclaw
+./scripts/update-jobs.sh --dry-run
 ```
-
-Or add your agent to `setup-agents.sh` for automated deployment on future runs.

@@ -171,11 +171,16 @@ fi
 
 # Deploy agent ConfigMaps AFTER config patch (must come after any kustomize apply,
 # since the base kustomization includes a default shadowman-agent that would overwrite)
+# Auto-discover: find all *-agent.yaml files in agent subdirectories
 log_info "Deploying agent ConfigMaps..."
-$KUBECTL apply -f "$REPO_ROOT/manifests/openclaw/agents/shadowman/shadowman-agent.yaml"
-$KUBECTL apply -f "$REPO_ROOT/manifests/openclaw/agents/resource-optimizer/resource-optimizer-agent.yaml"
-$KUBECTL apply -f "$REPO_ROOT/manifests/openclaw/agents/mlops-monitor/mlops-monitor-agent.yaml"
-log_success "Agent ConfigMaps deployed"
+AGENT_CM_COUNT=0
+for agent_yaml in "$REPO_ROOT/manifests/openclaw/agents"/*/*-agent.yaml; do
+  [ -f "$agent_yaml" ] || continue
+  $KUBECTL apply -f "$agent_yaml"
+  AGENT_CM_COUNT=$((AGENT_CM_COUNT + 1))
+  log_success "  $(basename "$(dirname "$agent_yaml")")"
+done
+log_success "$AGENT_CM_COUNT agent ConfigMaps deployed"
 echo ""
 
 # Deploy NPS skill ConfigMap
@@ -251,12 +256,24 @@ log_success "OpenClaw ready"
 echo ""
 
 # Install agent AGENTS.md and agent.json into each workspace
+# Auto-discover: find all deployed agent ConfigMaps and extract their agent ID
 log_info "Installing agent identity files into workspaces..."
-for agent_cfg in shadowman:workspace-${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME} resource-optimizer:workspace-${OPENCLAW_PREFIX}_resource_optimizer mlops-monitor:workspace-${OPENCLAW_PREFIX}_mlops_monitor; do
-  AGENT_NAME="${agent_cfg%%:*}"
-  WORKSPACE="${agent_cfg#*:}"
+for agent_yaml in "$REPO_ROOT/manifests/openclaw/agents"/*/*-agent.yaml; do
+  [ -f "$agent_yaml" ] || continue
+  AGENT_DIR_NAME="$(basename "$(dirname "$agent_yaml")")"
+  CM_NAME="${AGENT_DIR_NAME}-agent"
+
+  # Derive workspace name from agent ID in the ConfigMap
+  # For shadowman: uses the custom name; for others: directory name with - → _
+  if [ "$AGENT_DIR_NAME" = "shadowman" ]; then
+    WORKSPACE="workspace-${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}"
+  else
+    AGENT_ID_SUFFIX="$(echo "$AGENT_DIR_NAME" | tr '-' '_')"
+    WORKSPACE="workspace-${OPENCLAW_PREFIX}_${AGENT_ID_SUFFIX}"
+  fi
+
   WORKSPACE_DIR="/home/node/.openclaw/${WORKSPACE}"
-  CM_NAME="${AGENT_NAME}-agent"
+
   # Ensure workspace directory exists
   $KUBECTL exec deployment/openclaw -n "$OPENCLAW_NAMESPACE" -c gateway -- mkdir -p "$WORKSPACE_DIR"
   for key in AGENTS.md agent.json; do
@@ -264,7 +281,7 @@ for agent_cfg in shadowman:workspace-${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}
       $KUBECTL exec -i deployment/openclaw -n "$OPENCLAW_NAMESPACE" -c gateway -- \
         sh -c "cat > ${WORKSPACE_DIR}/${key}"
   done
-  log_success "  ${AGENT_NAME} → ${WORKSPACE}"
+  log_success "  ${AGENT_DIR_NAME} → ${WORKSPACE}"
 done
 echo ""
 
@@ -324,16 +341,25 @@ echo "║  Agent Setup Complete!                                     ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Agents deployed:"
-echo "  ${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME}:            interactive assistant"
-echo "  ${OPENCLAW_PREFIX}_resource_optimizer:  cost analysis (report CronJob every 8h)"
-echo "  ${OPENCLAW_PREFIX}_mlops_monitor:       MLOps monitoring (report CronJob every 6h)"
+for agent_yaml in "$REPO_ROOT/manifests/openclaw/agents"/*/*-agent.yaml; do
+  [ -f "$agent_yaml" ] || continue
+  dir_name="$(basename "$(dirname "$agent_yaml")")"
+  if [ "$dir_name" = "shadowman" ]; then
+    echo "  ${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME} (${SHADOWMAN_DISPLAY_NAME})"
+  else
+    agent_id_suffix="$(echo "$dir_name" | tr '-' '_')"
+    echo "  ${OPENCLAW_PREFIX}_${agent_id_suffix}"
+  fi
+done
 echo ""
-echo "Skills deployed:"
-echo "  nps:  query the NPS Agent for national park information"
+echo "Cron jobs:"
+for job_file in "$REPO_ROOT/manifests/openclaw/agents"/*/JOB.md; do
+  [ -f "$job_file" ] || continue
+  job_id=$(sed -n '/^---$/,/^---$/{ /^id:/{ s/^id: *//; p; } }' "$job_file" | head -1)
+  schedule=$(sed -n '/^---$/,/^---$/{ /^schedule:/{ s/^schedule: *"*//; s/"*$//; p; } }' "$job_file" | head -1)
+  echo "  ${job_id}: ${schedule}"
+done
 echo ""
-echo "Agent cron jobs:"
-echo "  resource-optimizer-analysis:  reads report, messages ${SHADOWMAN_DISPLAY_NAME} (9 AM + 5 PM UTC)"
-echo "  mlops-monitor-analysis:      reads MLflow report, messages ${SHADOWMAN_DISPLAY_NAME} (10 AM + 4 PM UTC)"
-echo ""
-echo "Cleanup: cd manifests/openclaw/agents && ./remove-custom-agents.sh"
+echo "Add a new agent:  ./scripts/add-agent.sh"
+echo "Update jobs:      ./scripts/update-jobs.sh"
 echo ""

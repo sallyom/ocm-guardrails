@@ -2,16 +2,25 @@
 # ============================================================================
 # UPDATE OPENCLAW INTERNAL CRON JOBS
 # ============================================================================
-# Writes OpenClaw's internal cron/jobs.json to the pod.
+# Discovers JOB.md files in manifests/openclaw/agents/*/JOB.md and writes
+# OpenClaw's internal cron/jobs.json to the pod.
 #
-# Current jobs:
-# - resource-optimizer-analysis: Reads the K8s CronJob report from ConfigMap,
-#   analyzes it, and messages the default agent with notable findings.
+# JOB.md format:
+#   ---
+#   id: my-job-id
+#   schedule: "0 9 * * *"
+#   tz: UTC
+#   ---
+#   Message body (sent to the agent when the job fires)
+#
+# The agent ID is derived from the directory name:
+#   resource-optimizer/ → ${OPENCLAW_PREFIX}_resource_optimizer
 #
 # Usage:
 #   ./update-jobs.sh                  # OpenShift (default)
 #   ./update-jobs.sh --k8s            # Vanilla Kubernetes
 #   ./update-jobs.sh --skip-restart   # Write files but don't restart gateway
+#   ./update-jobs.sh --dry-run        # Print jobs.json without writing
 # ============================================================================
 
 set -euo pipefail
@@ -21,10 +30,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Parse flags
 SKIP_RESTART=false
+DRY_RUN=false
 for arg in "$@"; do
   case "$arg" in
     --k8s) KUBECTL="${KUBECTL:-kubectl}" ;;
     --skip-restart) SKIP_RESTART=true ;;
+    --dry-run) DRY_RUN=true ;;
   esac
 done
 
@@ -33,6 +44,7 @@ KUBECTL="${KUBECTL:-oc}"
 # Colors
 GREEN="${GREEN:-\033[0;32m}"
 BLUE="${BLUE:-\033[0;34m}"
+YELLOW="${YELLOW:-\033[0;33m}"
 RED="${RED:-\033[0;31m}"
 NC="${NC:-\033[0m}"
 
@@ -40,6 +52,7 @@ NC="${NC:-\033[0m}"
 if ! declare -f log_info >/dev/null 2>&1; then
   log_info()    { echo -e "${BLUE}ℹ️  $1${NC}"; }
   log_success() { echo -e "${GREEN}✅ $1${NC}"; }
+  log_warn()    { echo -e "${YELLOW}⚠️  $1${NC}"; }
   log_error()   { echo -e "${RED}❌ $1${NC}"; }
 fi
 
@@ -69,43 +82,113 @@ if [ -z "${OPENCLAW_NAMESPACE:-}" ]; then
   done
 fi
 
-# ---- Write cron jobs ----
+# ---- Discover JOB.md files ----
+
+AGENTS_DIR="$REPO_ROOT/manifests/openclaw/agents"
+JOB_FILES=()
+
+for job_file in "$AGENTS_DIR"/*/JOB.md; do
+  [ -f "$job_file" ] || continue
+  JOB_FILES+=("$job_file")
+done
+
+if [ ${#JOB_FILES[@]} -eq 0 ]; then
+  log_warn "No JOB.md files found in $AGENTS_DIR/*/JOB.md"
+  exit 0
+fi
+
+log_info "Found ${#JOB_FILES[@]} job(s):"
+
+# ---- Parse JOB.md files and build jobs array ----
+
+# Parse a frontmatter field from a JOB.md file
+# Usage: parse_frontmatter "file" "field"
+parse_frontmatter() {
+  local file="$1" field="$2"
+  sed -n '/^---$/,/^---$/{
+    /^'"$field"':/{ s/^'"$field"': *//; s/^"//; s/"$//; p; }
+  }' "$file" | head -1
+}
+
+# Extract body (everything after the second ---)
+parse_body() {
+  local file="$1"
+  sed -n '/^---$/,/^---$/!p' "$file" | sed '/./,$!d'
+}
+
+JOBS_JSON=""
+FIRST=true
+
+for job_file in "${JOB_FILES[@]}"; do
+  # Derive agent ID from directory name (resource-optimizer → resource_optimizer)
+  dir_name=$(basename "$(dirname "$job_file")")
+  agent_id="${OPENCLAW_PREFIX}_$(echo "$dir_name" | tr '-' '_')"
+
+  # Parse frontmatter
+  job_id=$(parse_frontmatter "$job_file" "id")
+  schedule=$(parse_frontmatter "$job_file" "schedule")
+  tz=$(parse_frontmatter "$job_file" "tz")
+
+  # Validate required fields
+  if [ -z "$job_id" ] || [ -z "$schedule" ]; then
+    log_warn "  Skipping $job_file — missing 'id' or 'schedule' in frontmatter"
+    continue
+  fi
+
+  tz="${tz:-UTC}"
+
+  # Extract and envsubst the message body
+  raw_body=$(parse_body "$job_file")
+  # Collapse multi-line body into single line for JSON, preserving sentence boundaries
+  message=$(echo "$raw_body" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
+  # Run envsubst to resolve ${OPENCLAW_PREFIX}, ${SHADOWMAN_CUSTOM_NAME}, etc.
+  message=$(echo "$message" | envsubst '${OPENCLAW_PREFIX} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME}')
+
+  # Escape for JSON
+  message=$(echo "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+  log_info "  $job_id ($dir_name) → schedule: $schedule"
+
+  # Build JSON entry
+  if ! $FIRST; then
+    JOBS_JSON+=","
+  fi
+  FIRST=false
+
+  JOBS_JSON+="
+    {
+      \"id\": \"$job_id\",
+      \"agentId\": \"$agent_id\",
+      \"schedule\": {\"kind\": \"cron\", \"expr\": \"$schedule\", \"tz\": \"$tz\"},
+      \"sessionTarget\": \"isolated\",
+      \"delivery\": { \"mode\": \"none\" },
+      \"wakeMode\": \"now\",
+      \"payload\": {
+        \"kind\": \"agentTurn\",
+        \"message\": \"$message\"
+      }
+    }"
+done
+
+FULL_JSON="{
+  \"version\": 1,
+  \"jobs\": [$JOBS_JSON
+  ]
+}"
+
+# ---- Write or print ----
+
+if $DRY_RUN; then
+  echo ""
+  echo "$FULL_JSON"
+  echo ""
+  exit 0
+fi
 
 log_info "Writing OpenClaw cron jobs..."
 
-# Use unquoted heredoc so bash substitutes ${OPENCLAW_PREFIX} and ${SHADOWMAN_CUSTOM_NAME}
-cat <<CRON_EOF | $KUBECTL exec -i deployment/openclaw -n "$OPENCLAW_NAMESPACE" -c gateway -- \
+echo "$FULL_JSON" | $KUBECTL exec -i deployment/openclaw -n "$OPENCLAW_NAMESPACE" -c gateway -- \
   sh -c 'mkdir -p /home/node/.openclaw/cron && cat > /home/node/.openclaw/cron/jobs.json'
-{
-  "version": 1,
-  "jobs": [
-    {
-      "id": "resource-optimizer-analysis",
-      "agentId": "${OPENCLAW_PREFIX}_resource_optimizer",
-      "schedule": {"kind": "cron", "expr": "0 9,17 * * *", "tz": "UTC"},
-      "sessionTarget": "isolated",
-      "delivery": { "mode": "none" },
-      "wakeMode": "now",
-      "payload": {
-        "kind": "agentTurn",
-        "message": "Read the latest resource report by running: cat /data/reports/resource-optimizer/report.txt — then analyze it for notable findings: over-provisioned pods (high requests but likely low usage), idle deployments (0 replicas), unattached PVCs, or any degraded deployments. If you find issues worth flagging, send a brief 2-3 sentence summary to ${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME} using sessions_send. Focus on actionable insights. If everything looks healthy, no message needed."
-      }
-    },
-    {
-      "id": "mlops-monitor-analysis",
-      "agentId": "${OPENCLAW_PREFIX}_mlops_monitor",
-      "schedule": {"kind": "cron", "expr": "0 10,16 * * *", "tz": "UTC"},
-      "sessionTarget": "isolated",
-      "delivery": { "mode": "none" },
-      "wakeMode": "now",
-      "payload": {
-        "kind": "agentTurn",
-        "message": "Read the latest MLOps report at /data/reports/mlops-monitor/report.txt. Analyze for: high error rates (above 5%), latency spikes (above 30s average), low evaluation scores, or unusual patterns. If you find anything notable, send a brief summary to ${OPENCLAW_PREFIX}_${SHADOWMAN_CUSTOM_NAME} using sessions_send. Include specific numbers. If metrics look healthy, no message needed."
-      }
-    }
-  ]
-}
-CRON_EOF
 
 log_success "Cron jobs written"
 echo ""
