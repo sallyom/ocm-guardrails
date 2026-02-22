@@ -217,9 +217,11 @@ spec:
               name: openclaw-secrets
               key: OTEL_EXPORTER_OTLP_ENDPOINT
               optional: true
-        # Google Vertex AI (for Gemini models via GCP)
+        # Google Vertex AI (for Gemini or Anthropic models via GCP)
         - name: GOOGLE_APPLICATION_CREDENTIALS
-          value: /vertex/vertex-credentials.json
+          value: /vertex/ambient-code-key.json
+        - name: GCE_METADATA_HOST
+          value: disabled
         - name: GOOGLE_CLOUD_PROJECT
           valueFrom:
             secretKeyRef:
@@ -543,7 +545,7 @@ spec:
       # Google Vertex AI credentials (optional — only needed for google-vertex provider)
       - name: vertex-credentials
         secret:
-          secretName: vertex-credentials
+          secretName: ambient-vertex
           optional: true
       # Shadowman agent (included in core deployment)
       - name: shadowman-agent

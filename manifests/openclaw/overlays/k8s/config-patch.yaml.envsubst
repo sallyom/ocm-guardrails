@@ -62,7 +62,7 @@ data:
       "agents": {
         "defaults": {
           "workspace": "~/.openclaw/workspace",
-          "model": {"primary": "nerc/openai/gpt-oss-20b"}
+          "model": {"primary": "${DEFAULT_AGENT_MODEL}"}
         },
         "list": [
           {

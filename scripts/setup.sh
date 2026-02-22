@@ -302,14 +302,24 @@ else
       log_error "Project ID is required for Vertex AI"
       exit 1
     fi
-    read -p "  GCP region [us-central1]: " GOOGLE_CLOUD_LOCATION
-    GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-us-central1}
-    read -p "  Path to service account JSON key: " VERTEX_SA_JSON_PATH
-    if [ ! -f "$VERTEX_SA_JSON_PATH" ]; then
+    read -p "  Vertex provider — 'google' for Gemini, 'anthropic' for Claude [google]: " VERTEX_PROVIDER
+    VERTEX_PROVIDER=${VERTEX_PROVIDER:-google}
+    if [ "$VERTEX_PROVIDER" = "anthropic" ]; then
+      REGION_DEFAULT="global"
+    else
+      REGION_DEFAULT="us-central1"
+    fi
+    read -p "  GCP region [$REGION_DEFAULT]: " GOOGLE_CLOUD_LOCATION
+    GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-$REGION_DEFAULT}
+    read -p "  Path to service account JSON key (leave empty if secret already exists): " VERTEX_SA_JSON_PATH
+    if [ -n "$VERTEX_SA_JSON_PATH" ] && [ ! -f "$VERTEX_SA_JSON_PATH" ]; then
       log_error "File not found: $VERTEX_SA_JSON_PATH"
       exit 1
     fi
     VERTEX_ENABLED=true
+    if [ -z "$VERTEX_SA_JSON_PATH" ]; then
+      log_info "No JSON key provided — assuming vertex secret already exists in cluster"
+    fi
     log_success "Vertex AI enabled: project=$GOOGLE_CLOUD_PROJECT region=$GOOGLE_CLOUD_LOCATION"
   else
     VERTEX_ENABLED=false
@@ -381,6 +391,7 @@ OPENCLAW_OAUTH_COOKIE_SECRET=$OPENCLAW_OAUTH_COOKIE_SECRET
 ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 MODEL_ENDPOINT=$MODEL_ENDPOINT
 VERTEX_ENABLED=$VERTEX_ENABLED
+VERTEX_PROVIDER=$VERTEX_PROVIDER
 GOOGLE_CLOUD_PROJECT=$GOOGLE_CLOUD_PROJECT
 GOOGLE_CLOUD_LOCATION=$GOOGLE_CLOUD_LOCATION
 VERTEX_SA_JSON_PATH=$VERTEX_SA_JSON_PATH
@@ -427,7 +438,7 @@ export VERTEX_PROVIDER="${VERTEX_PROVIDER:-google}"
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   export DEFAULT_AGENT_MODEL="anthropic/claude-sonnet-4-5"
 elif [ "${VERTEX_ENABLED:-}" = "true" ] && [ "${VERTEX_PROVIDER}" = "anthropic" ]; then
-  export DEFAULT_AGENT_MODEL="anthropic-vertex/claude-sonnet-4-5"
+  export DEFAULT_AGENT_MODEL="anthropic-vertex/claude-sonnet-4-6"
   log_info "Using Anthropic Vertex (Claude via GCP) as default agent model"
 elif [ "${VERTEX_ENABLED:-}" = "true" ]; then
   export DEFAULT_AGENT_MODEL="google-vertex/gemini-2.5-pro"
@@ -531,7 +542,7 @@ echo ""
 # Create Vertex AI credentials secret (if enabled)
 if [ "${VERTEX_ENABLED:-}" = "true" ] && [ -n "${VERTEX_SA_JSON_PATH:-}" ] && [ -f "${VERTEX_SA_JSON_PATH:-}" ]; then
   log_info "Creating Vertex AI credentials secret..."
-  $KUBECTL create secret generic vertex-credentials \
+  $KUBECTL create secret generic ambient-vertex \
     -n "$OPENCLAW_NAMESPACE" \
     --from-file=vertex-credentials.json="$VERTEX_SA_JSON_PATH" \
     --dry-run=client -o yaml | $KUBECTL apply -f -
