@@ -1,0 +1,86 @@
+{
+  "plugins": {
+    "allow": ["diagnostics-otel"],
+    "entries": {
+      "diagnostics-otel": {"enabled": true}
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 18789,
+    "auth": {"mode": "token"},
+    "http": {"endpoints": {"chatCompletions": {"enabled": true}}}
+  },
+  "diagnostics": {
+    "enabled": true,
+    "otel": {
+      "enabled": ${OTEL_ENABLED},
+      "endpoint": "${OTEL_ENDPOINT}",
+      "traces": true,
+      "metrics": true,
+      "logs": false
+    }
+  },
+  "models": {
+    "providers": {
+      "default": {
+        "baseUrl": "${MODEL_ENDPOINT}",
+        "api": "${MODEL_API}",
+        "apiKey": "${MODEL_API_KEY}",
+        "models": [
+          {
+            "id": "${MODEL_ID}",
+            "name": "${MODEL_NAME}",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": 131072,
+            "maxTokens": 16384
+          }
+        ]
+      }
+    }
+  },
+  "tools": {
+    "allow": ["exec", "read", "write"],
+    "exec": {
+      "security": "allowlist",
+      "safeBins": ["df", "free", "ps", "uptime", "uname",
+                   "cat", "grep", "ls", "wc", "date",
+                   "findmnt", "lsblk", "hostname"],
+      "safeBinProfiles": {
+        "df": {},
+        "free": {},
+        "ps": {},
+        "uptime": {},
+        "uname": {},
+        "cat": {},
+        "grep": {},
+        "ls": {},
+        "wc": {},
+        "date": {},
+        "findmnt": {},
+        "lsblk": {},
+        "hostname": {}
+      },
+      "timeoutSec": 30
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "default/${MODEL_ID}"
+      }
+    },
+    "list": [
+      {
+        "id": "${AGENT_ID}",
+        "name": "${AGENT_NAME}",
+        "workspace": "~/.openclaw/workspace",
+        "model": {"primary": "default/${MODEL_ID}"}
+      }
+    ]
+  },
+  "cron": {"enabled": false}
+}
