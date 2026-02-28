@@ -5,6 +5,7 @@ resources:
   - ../../base
 patches:
   - path: secrets-patch.yaml
+  - path: oauth-secrets-patch.yaml
   - path: config-patch.yaml
   - path: deployment-patch.yaml
   - path: route-patch.yaml

@@ -13,6 +13,7 @@ data:
     'use strict';
     const http = require('http');
     const crypto = require('crypto');
+    const fs = require('fs');
 
     const PORT = 8080;
     const OPENCLAW_HOST = '127.0.0.1';
@@ -21,8 +22,11 @@ data:
     const AGENT_NAME = process.env.AGENT_NAME || 'openclaw';
     const AGENT_DESCRIPTION = process.env.AGENT_DESCRIPTION || 'OpenClaw AI Agent Gateway';
     const DEFAULT_MODEL = process.env.DEFAULT_AGENT_MODEL || 'nerc/openai/gpt-oss-20b';
+    const SVID_CERT_PATH = process.env.SVID_CERT_PATH || '/opt/svid.pem';
+    const SVID_KEY_PATH = process.env.SVID_KEY_PATH || '/opt/svid_key.pem';
+    const SIGNING_ENABLED = process.env.AGENTCARD_SIGNING_ENABLED !== 'false';
+    const SVID_POLL_INTERVAL_MS = 30000;
 
-    // Read OpenClaw config to populate skills from agents.list[]
     let skills = [
       {
         id: 'chat',
@@ -33,7 +37,6 @@ data:
     ];
 
     try {
-      const fs = require('fs');
       const configPath = '/home/node/.openclaw/openclaw.json';
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -51,14 +54,150 @@ data:
       console.error('Could not read OpenClaw config for skills:', err.message);
     }
 
-    const AGENT_CARD = {
-      name: AGENT_NAME,
-      description: AGENT_DESCRIPTION,
-      version: '1.0.0',
-      url: `http://openclaw.${process.env.POD_NAMESPACE || 'openclaw'}.svc.cluster.local:${PORT}`,
-      capabilities: { streaming: false },
-      skills: skills
-    };
+    // --- JWS Agent Card Signing (SPIRE SVID) ---
+
+    function base64urlEncode(buf) {
+      return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    function parsePEMCerts(pemData) {
+      const certs = [];
+      const regex = /-----BEGIN CERTIFICATE-----\n([\s\S]*?)-----END CERTIFICATE-----/g;
+      let match;
+      while ((match = regex.exec(pemData)) !== null) {
+        certs.push(match[1].replace(/\n/g, ''));
+      }
+      return certs;
+    }
+
+    function detectAlgorithm(privateKey) {
+      const keyObj = crypto.createPrivateKey(privateKey);
+      const details = keyObj.asymmetricKeyType;
+      if (details === 'ec') {
+        const jwk = keyObj.export({ format: 'jwk' });
+        switch (jwk.crv) {
+          case 'P-256': return 'ES256';
+          case 'P-384': return 'ES384';
+          case 'P-521': return 'ES512';
+        }
+      }
+      if (details === 'rsa') return 'RS256';
+      throw new Error(`Unsupported key type: ${details}`);
+    }
+
+    function canonicalJSON(obj) {
+      if (obj === null || obj === undefined) return undefined;
+      if (typeof obj !== 'object') return JSON.stringify(obj);
+      if (Array.isArray(obj)) {
+        const items = obj.map(v => canonicalJSON(v)).filter(v => v !== undefined);
+        return '[' + items.join(',') + ']';
+      }
+      const keys = Object.keys(obj).sort();
+      const pairs = [];
+      for (const k of keys) {
+        if (k === 'signatures') continue;
+        const v = obj[k];
+        if (v === null || v === undefined || v === '') continue;
+        if (Array.isArray(v) && v.length === 0) continue;
+        if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
+        const val = canonicalJSON(v);
+        if (val !== undefined) pairs.push(JSON.stringify(k) + ':' + val);
+      }
+      return '{' + pairs.join(',') + '}';
+    }
+
+    function signAgentCard(cardObj, certPEM, keyPEM) {
+      const alg = detectAlgorithm(keyPEM);
+      const x5cChain = parsePEMCerts(certPEM);
+      if (x5cChain.length === 0) throw new Error('No certificates found in SVID PEM');
+
+      const protectedHeader = { alg, x5c: x5cChain };
+      const protectedB64 = base64urlEncode(Buffer.from(JSON.stringify(protectedHeader)));
+      const payload = canonicalJSON(cardObj);
+      const payloadB64 = base64urlEncode(Buffer.from(payload));
+      const signingInput = protectedB64 + '.' + payloadB64;
+
+      let hashAlg;
+      switch (alg) {
+        case 'ES256': case 'RS256': hashAlg = 'sha256'; break;
+        case 'ES384': case 'RS384': hashAlg = 'sha384'; break;
+        case 'ES512': case 'RS512': hashAlg = 'sha512'; break;
+        default: throw new Error(`Unsupported algorithm: ${alg}`);
+      }
+
+      const privateKey = crypto.createPrivateKey(keyPEM);
+      let signatureB64;
+
+      if (alg.startsWith('ES')) {
+        const sig = crypto.sign(null, Buffer.from(signingInput), {
+          key: privateKey,
+          dsaEncoding: 'ieee-p1363'
+        });
+        signatureB64 = base64urlEncode(sig);
+      } else {
+        const sig = crypto.sign(hashAlg, Buffer.from(signingInput), privateKey);
+        signatureB64 = base64urlEncode(sig);
+      }
+
+      return { protected: protectedB64, signature: signatureB64 };
+    }
+
+    let cachedCertPEM = null;
+    let cachedKeyPEM = null;
+    let cachedSignedCard = null;
+    let lastSvidMtime = 0;
+
+    function loadSVIDIfChanged() {
+      try {
+        if (!fs.existsSync(SVID_CERT_PATH) || !fs.existsSync(SVID_KEY_PATH)) return false;
+        const stat = fs.statSync(SVID_CERT_PATH);
+        const mtime = stat.mtimeMs;
+        if (mtime === lastSvidMtime && cachedCertPEM) return false;
+        cachedCertPEM = fs.readFileSync(SVID_CERT_PATH, 'utf8');
+        cachedKeyPEM = fs.readFileSync(SVID_KEY_PATH, 'utf8');
+        lastSvidMtime = mtime;
+        cachedSignedCard = null;
+        console.log('SVID reloaded (cert changed)');
+        return true;
+      } catch (err) {
+        console.error('Failed to load SVID:', err.message);
+        return false;
+      }
+    }
+
+    function getAgentCard() {
+      const baseCard = {
+        capabilities: { streaming: false },
+        description: AGENT_DESCRIPTION,
+        name: AGENT_NAME,
+        skills: skills,
+        url: `http://openclaw.${process.env.POD_NAMESPACE || 'openclaw'}.svc.cluster.local:${PORT}`,
+        version: '1.0.0'
+      };
+
+      if (!SIGNING_ENABLED || !cachedCertPEM || !cachedKeyPEM) {
+        return baseCard;
+      }
+
+      if (cachedSignedCard) return cachedSignedCard;
+
+      try {
+        const sig = signAgentCard(baseCard, cachedCertPEM, cachedKeyPEM);
+        cachedSignedCard = { ...baseCard, signatures: [sig] };
+        console.log('Agent card signed successfully');
+        return cachedSignedCard;
+      } catch (err) {
+        console.error('Agent card signing failed, serving unsigned:', err.message);
+        return baseCard;
+      }
+    }
+
+    loadSVIDIfChanged();
+    setInterval(() => {
+      if (loadSVIDIfChanged()) cachedSignedCard = null;
+    }, SVID_POLL_INTERVAL_MS);
+
+    // --- HTTP helpers ---
 
     function readBody(req) {
       return new Promise((resolve, reject) => {
@@ -96,7 +235,6 @@ data:
     }
 
     async function handleA2AMessage(a2aRequest, authHeader) {
-      // Extract message text from A2A parts
       const parts = a2aRequest.params?.message?.parts || [];
       const text = parts
         .filter(p => p.kind === 'text' || (typeof p.text === 'string'))
@@ -111,7 +249,6 @@ data:
         };
       }
 
-      // Translate to OpenAI chat completions
       const openaiPayload = JSON.stringify({
         model: DEFAULT_MODEL,
         messages: [{ role: 'user', content: text }],
@@ -139,7 +276,6 @@ data:
         };
       }
 
-      // Extract assistant response
       const content = result.body?.choices?.[0]?.message?.content || 'No response from agent';
 
       return {
@@ -162,33 +298,29 @@ data:
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url, `http://${req.headers.host}`);
 
-      // Agent card discovery
       if (req.method === 'GET' && (url.pathname === '/.well-known/agent-card.json' || url.pathname === '/.well-known/agent.json')) {
+        const card = getAgentCard();
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(AGENT_CARD));
+        res.end(JSON.stringify(card));
         return;
       }
 
-      // Health check
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', bridge: 'a2a' }));
+        res.end(JSON.stringify({
+          status: 'ok',
+          bridge: 'a2a',
+          signing: SIGNING_ENABLED && !!cachedCertPEM ? 'active' : 'disabled'
+        }));
         return;
       }
 
-      // A2A JSON-RPC endpoint
       if (req.method === 'POST' && (url.pathname === '/' || url.pathname === '/a2a')) {
         try {
           const body = await readBody(req);
           const a2aRequest = JSON.parse(body);
 
-          if (a2aRequest.method === 'message/send') {
-            const authHeader = req.headers['authorization'];
-            const response = await handleA2AMessage(a2aRequest, authHeader);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(response));
-          } else if (a2aRequest.method === 'message/stream') {
-            // For now, handle streaming as non-streaming and return complete response
+          if (a2aRequest.method === 'message/send' || a2aRequest.method === 'message/stream') {
             const authHeader = req.headers['authorization'];
             const response = await handleA2AMessage(a2aRequest, authHeader);
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -218,6 +350,7 @@ data:
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`A2A bridge listening on 0.0.0.0:${PORT}`);
-      console.log(`Agent card: http://0.0.0.0:${PORT}/.well-known/agent-card.json`);
+      console.log(`Agent card: http://0.0.0.0:${PORT}/.well-known/agent.json`);
+      console.log(`Signing: ${SIGNING_ENABLED ? 'enabled' : 'disabled'}`);
       console.log(`Skills: ${skills.map(s => s.id).join(', ')}`);
     });

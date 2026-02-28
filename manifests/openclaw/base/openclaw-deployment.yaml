@@ -6,11 +6,10 @@ metadata:
   namespace: openclaw
   labels:
     app: openclaw
-    # TODO: re-enable kagenti labels when kagenti operator supports unmanaged agents
-    # kagenti.io/type: agent
-    # kagenti.io/protocol: a2a
-    # kagenti.io/framework: "OpenClaw"
-    # kagenti.io/workload-type: deployment
+    kagenti.io/type: agent
+    protocol.kagenti.io/a2a: ""
+    kagenti.io/framework: "OpenClaw"
+    kagenti.io/workload-type: deployment
     app.kubernetes.io/name: openclaw
     app.kubernetes.io/component: agent
 spec:
@@ -24,11 +23,13 @@ spec:
     metadata:
       labels:
         app: openclaw
+        kagenti.io/type: agent
+        protocol.kagenti.io/a2a: ""
       annotations:
         prometheus.io/scrape: 'true'
         prometheus.io/port: '18789'
         sidecar.opentelemetry.io/inject: "openclaw-sidecar"
-        # kagenti.io/description: "OpenClaw AI Agent Gateway"
+        kagenti.io/description: "OpenClaw AI Agent Gateway"
     spec:
       serviceAccountName: openclaw-oauth-proxy
       initContainers:
@@ -319,12 +320,21 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: AGENTCARD_SIGNING_ENABLED
+          value: "true"
+        - name: SVID_CERT_PATH
+          value: "/opt/svid.pem"
+        - name: SVID_KEY_PATH
+          value: "/opt/svid_key.pem"
         volumeMounts:
         - name: a2a-bridge-script
           mountPath: /bridge
           readOnly: true
         - name: openclaw-home
           mountPath: /home/node/.openclaw
+          readOnly: true
+        - name: svid-output
+          mountPath: /opt
           readOnly: true
         resources:
           requests:
@@ -347,7 +357,8 @@ spec:
           periodSeconds: 10
         securityContext:
           allowPrivilegeEscalation: false
-          runAsNonRoot: true
+          runAsNonRoot: false
+          runAsUser: 0
           readOnlyRootFilesystem: true
           capabilities:
             drop:

@@ -8,6 +8,7 @@ metadata:
     app: nps-agent
     kagenti.io/type: agent
     kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
 spec:
   selector:
     app: nps-agent

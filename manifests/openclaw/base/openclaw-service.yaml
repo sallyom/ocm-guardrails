@@ -9,6 +9,7 @@ metadata:
     app: openclaw
     kagenti.io/type: agent
     kagenti.io/protocol: a2a
+    protocol.kagenti.io/a2a: ""
     app.kubernetes.io/name: openclaw
   annotations:
     service.beta.openshift.io/serving-cert-secret-name: openclaw-proxy-tls

@@ -34,6 +34,7 @@ manifests-private/
 # Generated from .envsubst templates by setup.sh
 manifests/openclaw/overlays/openshift/kustomization.yaml
 manifests/openclaw/overlays/openshift/secrets-patch.yaml
+manifests/openclaw/overlays/openshift/oauth-secrets-patch.yaml
 manifests/openclaw/overlays/openshift/config-patch.yaml
 manifests/openclaw/overlays/openshift/deployment-patch.yaml
 manifests/openclaw/overlays/openshift/oauthclient.yaml
