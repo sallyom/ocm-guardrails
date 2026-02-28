@@ -4,46 +4,79 @@
 
 ## What This Repo Is
 
-Kubernetes deployment manifests and scripts for [OpenClaw](https://github.com/openclaw), an AI agent runtime platform. Deploys on OpenShift or vanilla Kubernetes (KinD, minikube, etc.).
+A reproducible demo of **AI agents running across hybrid platforms** — OpenShift, vanilla Kubernetes, and bare-metal Linux — connected via zero-trust [Google A2A](https://github.com/google/A2A) protocol powered by [Kagenti](https://github.com/kagenti/kagenti) (SPIFFE/SPIRE + Keycloak).
 
-Each user gets their own namespaced instance with a named AI agent, Control UI, and WebChat.
+[OpenClaw](https://github.com/openclaw) is used as the agent runtime, but the network architecture (A2A, identity, observability) is designed to stand on its own and work with any agent framework.
+
+### Deployment Targets
+
+| Platform | Setup | What It Does |
+|----------|-------|-------------|
+| **OpenShift** | `./scripts/setup.sh` | Central gateway with agents, OAuth, routes, OTEL sidecar |
+| **Kubernetes** | `./scripts/setup.sh --k8s` | Same as OpenShift minus OAuth/routes (KinD, minikube, etc.) |
+| **Edge (RHEL/Fedora)** | `edge/scripts/setup-edge.sh` | Rootless Podman Quadlet, systemd --user, SELinux enforcing |
+
+### The Network Vision
+
+```
+                    ┌──── OpenShift Cluster ────┐
+                    │  Central Gateway          │
+                    │  ├── Supervisor agents     │
+                    │  ├── MLflow (traces)       │
+                    │  ├── SPIRE Server          │
+                    │  └── Keycloak              │
+                    └────────┬──────────────────┘
+                             │
+                    A2A (SPIFFE mTLS, zero-trust)
+                             │
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+    ┌─────┴─────┐    ┌──────┴─────┐    ┌───────┴────┐
+    │ RHEL NUC  │    │ RHEL VM    │    │ K8s cluster │
+    │ Quadlet   │    │ Quadlet    │    │ namespace   │
+    │ agent     │    │ agent      │    │ agent       │
+    └───────────┘    └────────────┘    └────────────┘
+```
+
+**Phased rollout:**
+- Phase 1 (current): Edge agents with SSH-based lifecycle control from central gateway
+- Phase 2: Multi-machine fleet coordination via supervisor agents
+- Phase 3: Full zero-trust A2A via Kagenti SPIRE/SPIFFE across all platforms
 
 ## Getting Started
 
-### Deploy (Two Commands)
+### OpenShift / Kubernetes
 
 ```bash
-# OpenShift
-./scripts/setup.sh
-
-# Vanilla Kubernetes (KinD, minikube, etc.)
-./scripts/setup.sh --k8s
+./scripts/setup.sh                    # OpenShift (interactive)
+./scripts/setup.sh --k8s              # Vanilla Kubernetes
 ```
 
-`setup.sh` is interactive — it prompts for:
-1. **Namespace prefix** (e.g., `sally`) — creates `sally-openclaw` namespace
-2. **Agent name** (e.g., `Lynx`) — the agent's display name
-3. **API keys** — Anthropic key (optional), model endpoint, Vertex AI (optional)
+`setup.sh` prompts for namespace prefix, agent name, API keys, and optional Vertex AI / A2A config. It generates secrets into `.env` (git-ignored), runs `envsubst` on templates, and deploys via kustomize.
 
-It generates secrets into `.env` (git-ignored), runs `envsubst` on templates, and deploys via kustomize.
+### Edge (RHEL / Fedora)
+
+```bash
+cd edge
+./scripts/setup-edge.sh               # Interactive setup on the Linux machine
+```
+
+Installs `.kube` Quadlet files with Pod YAML, ConfigMaps, and a credentials ConfigMap into `~/.config/containers/systemd/`. Agent stays stopped until explicitly started (central supervisor controls lifecycle via SSH).
 
 ### Local Testing with KinD
 
 ```bash
-./scripts/create-cluster.sh       # Creates a KinD cluster
-./scripts/setup.sh --k8s          # Deploy OpenClaw to it
+./scripts/create-cluster.sh           # Creates a KinD cluster
+./scripts/setup.sh --k8s              # Deploy OpenClaw to it
 kubectl port-forward svc/openclaw 18789:18789 -n <prefix>-openclaw
-# Open http://localhost:18789
 ```
 
-### Deploy Additional Agents
+### Additional Agents
 
 ```bash
-./scripts/setup-agents.sh           # OpenShift
-./scripts/setup-agents.sh --k8s     # Kubernetes
+./scripts/setup-agents.sh             # OpenShift
+./scripts/setup-agents.sh --k8s       # Kubernetes
 ```
-
-Adds resource-optimizer, mlops-monitor, and NPS skill to the instance.
 
 ### Other Scripts
 
@@ -60,7 +93,7 @@ All scripts accept `--k8s` for vanilla Kubernetes.
 ## Repository Structure
 
 ```
-openclaw-k8s/
+openclaw-infra/
 ├── scripts/                    # Deployment and management scripts
 ├── .env                        # Generated secrets (GIT-IGNORED)
 ├── manifests/
@@ -72,12 +105,13 @@ openclaw-k8s/
 │       │   ├── openshift/      # OpenShift overlay (secrets, config, OAuth, routes)
 │       │   └── k8s/            # Vanilla Kubernetes overlay
 │       ├── agents/             # Agent configs, RBAC, cron jobs
-│       │   ├── shadowman/      # Default agent (customizable name)
-│       │   ├── resource-optimizer/
-│       │   └── mlops-monitor/
 │       ├── skills/             # Agent skills (NPS, A2A)
 │       └── llm/                # vLLM reference deployment (GPU model server)
 ├── manifests/nps-agent/        # NPS Agent (separate namespace)
+├── edge/
+│   ├── quadlet/                # .kube Quadlet files + Pod/ConfigMap YAML templates
+│   ├── config/                 # openclaw.json, OTEL, AGENTS.md templates
+│   └── scripts/                # setup-edge.sh
 ├── observability/              # OTEL sidecar and collector templates
 └── docs/                       # Architecture and reference docs
 ```
@@ -88,25 +122,34 @@ openclaw-k8s/
 
 - `.envsubst` files contain `${VAR}` placeholders and are committed to Git
 - `.env` contains real secrets and is git-ignored
-- `setup.sh` runs `envsubst` with an explicit variable list to protect non-env placeholders like `{agentId}`
+- Setup scripts run `envsubst` with explicit variable lists to protect non-env placeholders like `{agentId}`
 - Generated `.yaml` files are git-ignored
 
-### Config Lifecycle
+### Config Lifecycle (K8s and Edge)
 
 ```
 .envsubst template    -->    ConfigMap    -->    PVC (live config)
-(source of truth)          (K8s object)        /home/node/.openclaw/openclaw.json
-                         setup.sh runs         init container copies
-                         envsubst + deploy     on EVERY pod restart
+(source of truth)          (K8s object         /home/node/.openclaw/openclaw.json
+                           or YAML file)       init container copies
+                                               on EVERY start
 ```
 
-- The init container copies `openclaw.json` from ConfigMap to PVC **on every restart**
-- UI changes write to PVC only — they are lost on next pod restart
+- The init container copies `openclaw.json`, `AGENTS.md`, and `agent.json` from ConfigMap mounts into the PVC on every start
+- UI changes write to PVC only — they are lost on next restart
 - Use `./scripts/export-config.sh` to capture live config before it gets overwritten
 
-### Per-User Namespaces
+### Per-User Namespaces (K8s)
 
 Each user gets `<prefix>-openclaw`. The `${OPENCLAW_PREFIX}` variable is used throughout templates. Agent IDs follow the pattern `<prefix>_<agent_name>`.
+
+### Edge Security Posture
+
+- Rootless Podman (no root anywhere)
+- SELinux: Enforcing
+- Tool exec allowlist — agents can only run read-only system commands
+- API keys automatically sanitized from child processes
+- Loopback-only gateway (default)
+- `Restart=no` — agent can't self-activate, only central supervisor via SSH
 
 ### K8s vs OpenShift
 
@@ -119,9 +162,9 @@ The `base/` directory contains all resources including A2A. Overlays and patches
 
 In `setup-agents.sh`, ConfigMaps are applied AFTER the kustomize config patch. The base kustomization includes a default `shadowman-agent` ConfigMap that would overwrite custom agent ConfigMaps if applied later.
 
-## A2A (Advanced, Optional)
+## A2A (Zero-Trust Agent Communication)
 
-Cross-namespace agent communication with zero-trust authentication. **Requires SPIRE + Keycloak infrastructure on the cluster** (manifests for those are not included in this repo).
+Cross-namespace and cross-platform agent communication using [Google A2A](https://github.com/google/A2A) protocol with [Kagenti](https://github.com/kagenti/kagenti) for zero-trust identity. **Requires SPIRE + Keycloak infrastructure on the cluster.**
 
 ```bash
 ./scripts/setup.sh --with-a2a              # OpenShift
@@ -129,16 +172,21 @@ Cross-namespace agent communication with zero-trust authentication. **Requires S
 ```
 
 When A2A is enabled:
-- 5 additional sidecar containers are added (a2a-bridge, proxy-init, spiffe-helper, client-registration, envoy-proxy)
-- AuthBridge ConfigMaps/Secrets are deployed (generated from `.envsubst` templates with Keycloak config)
-- Custom SCC is applied (OpenShift) for AuthBridge capabilities (NET_ADMIN, NET_RAW)
-- A2A skill is installed into agent workspaces
-- `setup.sh` prompts for Keycloak URL, realm, and admin credentials
+- 5 additional sidecar containers: a2a-bridge, proxy-init, spiffe-helper, client-registration, envoy-proxy
+- AuthBridge exchanges SPIFFE workload identities for OAuth tokens via Keycloak
+- Custom SCC applied (OpenShift) for AuthBridge capabilities (NET_ADMIN, NET_RAW)
+- A2A skill installed into agent workspaces
 
 When A2A is disabled (default):
-- `strip-a2a.yaml` patch removes all A2A containers, volumes, ConfigMaps, and Secrets via kustomize strategic merge patches (`$patch: delete`)
-- No SPIRE/Keycloak infrastructure required
+- `strip-a2a.yaml` removes all A2A containers/volumes via kustomize strategic merge patches
 - Default deployment has 2 containers: gateway + init-config (OpenShift adds oauth-proxy)
+
+## Observability
+
+All platforms emit OTLP traces to MLflow:
+- **OpenShift/K8s**: OTEL sidecar collector forwards to central MLflow
+- **Edge**: Local OTEL collector Quadlet forwards to MLflow route on OpenShift
+- `diagnostics.otel.captureContent: true` required in config for trace inputs/outputs to appear in MLflow
 
 ## Pre-Built Agents
 
@@ -176,10 +224,15 @@ When A2A is disabled (default):
 | `manifests/openclaw/overlays/k8s/config-patch.yaml.envsubst` | K8s gateway config |
 | `manifests/openclaw/agents/agents-config-patch.yaml.envsubst` | Agent list overlay |
 | `manifests/openclaw/base/openclaw-deployment.yaml` | Gateway deployment with init container |
-| `manifests/openclaw/base-k8s/deployment-k8s-patch.yaml` | K8s deployment patch (fsGroup, strips oauth-proxy) |
+| `manifests/openclaw/base-k8s/deployment-k8s-patch.yaml` | K8s deployment patch |
 | `manifests/openclaw/patches/strip-a2a.yaml` | Removes A2A containers/volumes |
-| `scripts/setup.sh` | Main deployment script |
+| `edge/quadlet/openclaw-agent.kube` | Edge agent Quadlet unit |
+| `edge/quadlet/openclaw-agent-pod.yaml.envsubst` | Edge Pod YAML template |
+| `edge/scripts/setup-edge.sh` | Edge deployment script |
+| `scripts/setup.sh` | Main K8s/OpenShift deployment script |
 | `scripts/setup-agents.sh` | Agent deployment script |
+| `docs/FLEET.md` | Fleet management architecture |
+| `docs/A2A-ARCHITECTURE.md` | Zero-trust A2A architecture |
 
 ## Troubleshooting
 
@@ -190,3 +243,5 @@ When A2A is disabled (default):
 | OAuthClient 500 "unauthorized_client" | `oc apply` corrupted secret state | Delete and recreate OAuthClient |
 | Agent shows wrong name | Init overwrote workspace or browser cache | Re-run `setup-agents.sh`; clear localStorage |
 | Kustomize overwrites agent ConfigMap | Base includes default shadowman-agent | `setup-agents.sh` applies ConfigMaps after kustomize |
+| Missing trace inputs/outputs in MLflow | `captureContent` not set | Add `diagnostics.otel.captureContent: true` to config |
+| Edge agent won't start (Secret error) | podman doesn't support Secret in `--configmap` | Use ConfigMap kind (setup-edge.sh handles this) |
