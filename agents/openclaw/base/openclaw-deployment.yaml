@@ -6,11 +6,9 @@ metadata:
   namespace: openclaw
   labels:
     app: openclaw
-    # TODO: re-enable kagenti labels when kagenti operator supports unmanaged agents
-    # kagenti.io/type: agent
-    # kagenti.io/protocol: a2a
-    # kagenti.io/framework: "OpenClaw"
-    # kagenti.io/workload-type: deployment
+    kagenti.io/type: agent
+    kagenti.io/protocol: a2a
+    kagenti.io/framework: "OpenClaw"
     app.kubernetes.io/name: openclaw
     app.kubernetes.io/component: agent
 spec:
@@ -24,45 +22,18 @@ spec:
     metadata:
       labels:
         app: openclaw
+        kagenti.io/type: agent
+        kagenti.io/protocol: a2a
+        kagenti.io/inject: enabled
       annotations:
         prometheus.io/scrape: 'true'
         prometheus.io/port: '18789'
         sidecar.opentelemetry.io/inject: "openclaw-sidecar"
-        # kagenti.io/description: "OpenClaw AI Agent Gateway"
+        kagenti.io/description: "OpenClaw AI Agent Gateway"
     spec:
       serviceAccountName: openclaw-oauth-proxy
       initContainers:
-      # AuthBridge: iptables redirect for transparent Envoy interception
-      - name: proxy-init
-        image: ghcr.io/kagenti/kagenti-extensions/proxy-init@sha256:401885edb969a53ef21f4ced1ba02e5141469fe0b32bb461ab4daec9d6a47cfe
-        imagePullPolicy: IfNotPresent
-        env:
-        - name: PROXY_PORT
-          value: "15123"
-        - name: INBOUND_PROXY_PORT
-          value: "15124"
-        - name: PROXY_UID
-          value: "1337"
-        - name: OUTBOUND_PORTS_EXCLUDE
-          value: "443,4317,4318,18789"
-        - name: INBOUND_PORTS_EXCLUDE
-          value: "8080,8443,18789,18790"
-        resources:
-          requests:
-            cpu: 10m
-            memory: 10Mi
-          limits:
-            cpu: 10m
-            memory: 10Mi
-        securityContext:
-          runAsUser: 0
-          runAsNonRoot: false
-          capabilities:
-            add:
-            - NET_ADMIN
-            - NET_RAW
-          seLinuxOptions:
-            type: spc_t
+      # Kagenti webhook injects proxy-init and AIB sidecars when kagenti.io/inject: enabled
       - name: init-config
         image: registry.redhat.io/ubi9-minimal:latest
         imagePullPolicy: IfNotPresent
@@ -295,249 +266,35 @@ spec:
           capabilities:
             drop:
             - ALL
-      # A2A bridge sidecar: translates Kagenti A2A protocol to OpenClaw API
-      - name: a2a-bridge
-        image: registry.access.redhat.com/ubi9/nodejs-20-minimal:latest
-        command: ["node", "/bridge/a2a-bridge.js"]
+      # Agent card server — serves /.well-known/agent.json for Kagenti operator discovery.
+      # Temporary until Kagenti webhook injects this or operator reads from CR directly.
+      - name: agent-card
+        image: registry.redhat.io/ubi9:latest
+        command: ["python3", "-m", "http.server", "8080", "--directory", "/srv"]
         ports:
         - name: a2a
           containerPort: 8080
-          protocol: TCP
-        env:
-        - name: OPENCLAW_GATEWAY_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: openclaw-secrets
-              key: OPENCLAW_GATEWAY_TOKEN
-        - name: AGENT_NAME
-          value: "openclaw"
-        - name: AGENT_DESCRIPTION
-          value: "OpenClaw AI Agent Gateway"
-        - name: DEFAULT_AGENT_MODEL
-          value: "nerc/openai/gpt-oss-20b"
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
         volumeMounts:
-        - name: a2a-bridge-script
-          mountPath: /bridge
-          readOnly: true
-        - name: openclaw-home
-          mountPath: /home/node/.openclaw
-          readOnly: true
+        - name: agent-card-data
+          mountPath: /srv/.well-known
         resources:
           requests:
             memory: 32Mi
-            cpu: 25m
+            cpu: 10m
           limits:
             memory: 64Mi
-            cpu: 100m
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: a2a
-          initialDelaySeconds: 5
-          periodSeconds: 30
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: a2a
-          initialDelaySeconds: 3
-          periodSeconds: 10
+            cpu: 50m
         securityContext:
           allowPrivilegeEscalation: false
-          runAsNonRoot: true
           readOnlyRootFilesystem: true
           capabilities:
             drop:
             - ALL
-      # AuthBridge: SPIFFE Helper — fetches SVIDs from SPIRE agent
-      - name: spiffe-helper
-        image: ghcr.io/spiffe/spiffe-helper:nightly
-        imagePullPolicy: IfNotPresent
-        command:
-        - /spiffe-helper
-        - -config=/etc/spiffe-helper/helper.conf
-        - run
-        volumeMounts:
-        - name: authbridge-spiffe-helper-config
-          mountPath: /etc/spiffe-helper
-        - name: spire-agent-socket
-          mountPath: /run/spire/agent-sockets
-          readOnly: true
-        - name: svid-output
-          mountPath: /opt
-        resources:
-          requests:
-            cpu: 25m
-            memory: 32Mi
-          limits:
-            cpu: 100m
-            memory: 64Mi
-        securityContext:
-          seLinuxOptions:
-            type: spc_t
-      # AuthBridge: Client Registration — registers with Keycloak using SPIFFE ID
-      - name: client-registration
-        image: ghcr.io/kagenti/kagenti-extensions/client-registration:latest
-        imagePullPolicy: IfNotPresent
-        command:
-        - /bin/sh
-        - -c
-        - |
-          echo "Waiting for SPIFFE credentials..."
-          while [ ! -f /opt/jwt_svid.token ]; do
-            echo "Waiting for SVID..."
-            sleep 2
-          done
-          echo "SPIFFE credentials ready!"
-
-          # Extract and save the client ID (SPIFFE ID) from the JWT
-          JWT_PAYLOAD=$(cat /opt/jwt_svid.token | cut -d'.' -f2)
-          CLIENT_ID=$(echo "$JWT_PAYLOAD"== | base64 -d 2>/dev/null | python -c "import sys,json; print(json.load(sys.stdin).get('sub',''))")
-          echo "$CLIENT_ID" > /shared/client-id.txt
-          echo "Client ID (SPIFFE ID): $CLIENT_ID"
-
-          echo "Starting client registration..."
-          python client_registration.py
-          echo "Client registration complete!"
-          echo "Staying alive to keep pod running..."
-          tail -f /dev/null
-        env:
-        - name: SPIRE_ENABLED
-          valueFrom:
-            configMapKeyRef:
-              key: SPIRE_ENABLED
-              name: authbridge-environments
-        - name: KEYCLOAK_URL
-          valueFrom:
-            configMapKeyRef:
-              key: KEYCLOAK_URL
-              name: authbridge-environments
-        - name: KEYCLOAK_REALM
-          valueFrom:
-            configMapKeyRef:
-              key: KEYCLOAK_REALM
-              name: authbridge-environments
-        - name: KEYCLOAK_ADMIN_USERNAME
-          valueFrom:
-            configMapKeyRef:
-              key: KEYCLOAK_ADMIN_USERNAME
-              name: authbridge-environments
-        - name: KEYCLOAK_ADMIN_PASSWORD
-          valueFrom:
-            configMapKeyRef:
-              key: KEYCLOAK_ADMIN_PASSWORD
-              name: authbridge-environments
-        - name: KEYCLOAK_TOKEN_EXCHANGE_ENABLED
-          valueFrom:
-            configMapKeyRef:
-              key: KEYCLOAK_TOKEN_EXCHANGE_ENABLED
-              name: authbridge-environments
-        - name: KEYCLOAK_CLIENT_REGISTRATION_ENABLED
-          valueFrom:
-            configMapKeyRef:
-              key: KEYCLOAK_CLIENT_REGISTRATION_ENABLED
-              name: authbridge-environments
-        - name: CLIENT_NAME
-          value: openclaw
-        - name: SECRET_FILE_PATH
-          value: /shared/client-secret.txt
-        volumeMounts:
-        - name: shared-data
-          mountPath: /shared
-        - name: svid-output
-          mountPath: /opt
-        resources:
-          requests:
-            cpu: 25m
-            memory: 32Mi
-          limits:
-            cpu: 100m
-            memory: 128Mi
-        securityContext:
-          seLinuxOptions:
-            type: spc_t
-      # AuthBridge: Envoy Proxy — transparent token exchange
-      - name: envoy-proxy
-        image: ghcr.io/kagenti/kagenti-extensions/envoy-with-processor:latest
-        imagePullPolicy: IfNotPresent
-        env:
-        - name: TOKEN_URL
-          valueFrom:
-            secretKeyRef:
-              key: TOKEN_URL
-              name: authbridge-proxy-config
-        - name: ISSUER
-          valueFrom:
-            secretKeyRef:
-              key: ISSUER
-              name: authbridge-proxy-config
-        - name: TARGET_AUDIENCE
-          valueFrom:
-            secretKeyRef:
-              key: TARGET_AUDIENCE
-              name: authbridge-proxy-config
-        - name: TARGET_SCOPES
-          valueFrom:
-            secretKeyRef:
-              key: TARGET_SCOPES
-              name: authbridge-proxy-config
-        - name: CLIENT_ID_FILE
-          value: /shared/client-id.txt
-        - name: CLIENT_SECRET_FILE
-          value: /shared/client-secret.txt
-        ports:
-        - containerPort: 15123
-          name: envoy-outbound
-          protocol: TCP
-        - containerPort: 15124
-          name: envoy-inbound
-          protocol: TCP
-        - containerPort: 9901
-          name: envoy-admin
-          protocol: TCP
-        - containerPort: 9090
-          name: ext-proc
-          protocol: TCP
-        volumeMounts:
-        - name: authbridge-envoy-config
-          mountPath: /etc/envoy
-          readOnly: true
-        - name: shared-data
-          mountPath: /shared
-          readOnly: true
-        resources:
-          requests:
-            cpu: 50m
-            memory: 64Mi
-          limits:
-            cpu: 200m
-            memory: 256Mi
-        securityContext:
-          runAsUser: 1337
-          runAsGroup: 1337
-          seLinuxOptions:
-            type: spc_t
+      # A2A sidecars (proxy-init, spiffe-helper, client-registration, envoy-proxy)
+      # are injected automatically by the kagenti-webhook when kagenti.io/inject: enabled
       volumes:
       - name: tmp-volume
         emptyDir: {}
-      # AuthBridge volumes
-      - name: shared-data
-        emptyDir: {}
-      - name: svid-output
-        emptyDir: {}
-      - name: spire-agent-socket
-        csi:
-          driver: csi.spiffe.io
-          readOnly: true
-      - name: authbridge-spiffe-helper-config
-        configMap:
-          name: authbridge-spiffe-helper-config
-      - name: authbridge-envoy-config
-        configMap:
-          name: authbridge-envoy-config
       - name: oauth-config
         secret:
           secretName: openclaw-oauth-config
@@ -570,9 +327,9 @@ spec:
         configMap:
           name: mlops-report-latest
           optional: true
-      # A2A bridge script (Kagenti integration)
-      - name: a2a-bridge-script
+      # Agent card for Kagenti operator discovery (/.well-known/agent.json)
+      - name: agent-card-data
         configMap:
-          name: a2a-bridge
+          name: openclaw-agent-card
       # Additional agents can be set up via setup-agents.sh
       # All agent workspaces are at ~/.openclaw/workspace* (inside openclaw-home-pvc)

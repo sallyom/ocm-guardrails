@@ -1,0 +1,21 @@
+# OpenClaw agent base: deployment, service, config, secrets, route
+# Composes with platform/base for shared infrastructure resources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openclaw
+resources:
+# Platform base (namespace, PVCs, quotas, PDB, RBAC)
+- ../../../platform/base
+# A2A auth stack (bridge, authbridge configs, SCC)
+- ../../../platform/auth-identity-bridge
+# OpenClaw-specific resources
+- openclaw-config-configmap.yaml
+- openclaw-deployment.yaml
+- openclaw-secrets-secret.yaml
+- openclaw-service.yaml
+- openclaw-route.yaml
+# A2A agent card (served by agent-card sidecar for Kagenti operator discovery)
+- openclaw-agent-card-configmap.yaml
+# Agent ConfigMaps (core deployment includes only shadowman)
+- shadowman-agent.yaml
+# Additional agents (resource-optimizer, etc.) are deployed via setup-agents.sh

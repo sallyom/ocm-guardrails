@@ -1,8 +1,5 @@
+# Platform overlay: vanilla Kubernetes patches
+# See kustomization.yaml for details.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: ${OPENCLAW_NAMESPACE}
-resources:
-  - ../../base-k8s
-patches:
-  - path: secrets-patch.yaml
-  - path: config-patch.yaml

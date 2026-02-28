@@ -1,0 +1,20 @@
+# AgentCard CR for Kagenti operator discovery
+# The operator uses selector to find matching pods and:
+#   - Fetches the agent card from the agent's /.well-known/agent.json endpoint
+#   - Propagates signature verification labels to pod template
+# The kagenti-webhook reads pod template labels (kagenti.io/inject: enabled)
+# and injects AIB sidecars (proxy-init, spiffe-helper, client-registration, envoy-proxy)
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: AgentCard
+metadata:
+  name: openclaw-agent-card
+  namespace: openclaw
+  labels:
+    app.kubernetes.io/name: openclaw
+    kagenti.io/protocol: a2a
+    kagenti.io/framework: OpenClaw
+spec:
+  selector:
+    matchLabels:
+      app: openclaw
+  syncPeriod: 30s

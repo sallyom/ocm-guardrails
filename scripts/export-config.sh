@@ -65,7 +65,7 @@ $KUBECTL exec deployment/openclaw -n "$OPENCLAW_NAMESPACE" -c gateway -- \
 echo "Exported to: $OUTPUT_FILE"
 echo ""
 echo "To diff against current manifest:"
-echo "  diff <(python3 -m json.tool $OUTPUT_FILE) <(python3 -m json.tool manifests/openclaw/overlays/openshift/config-patch.yaml.envsubst 2>/dev/null || echo 'n/a')"
+echo "  diff <(python3 -m json.tool $OUTPUT_FILE) <(python3 -m json.tool agents/openclaw/overlays/openshift/config-patch.yaml.envsubst 2>/dev/null || echo 'n/a')"
 echo ""
 echo "To update the overlay config-patch, copy the relevant sections"
 echo "from the export into the .envsubst template, replacing concrete"

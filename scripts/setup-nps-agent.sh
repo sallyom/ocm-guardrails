@@ -137,7 +137,7 @@ echo ""
 
 # Apply SCC RBAC (reuses the shared openclaw-authbridge SCC)
 log_info "Applying SCC RBAC..."
-if $KUBECTL apply -f "$REPO_ROOT/manifests/openclaw/base/openclaw-scc.yaml" 2>/dev/null; then
+if $KUBECTL apply -f "$REPO_ROOT/agents/openclaw/base/openclaw-scc.yaml" 2>/dev/null; then
   log_success "SCC openclaw-authbridge applied"
 else
   log_warn "Could not apply SCC (may already exist or need cluster-admin)"

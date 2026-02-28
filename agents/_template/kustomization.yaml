@@ -1,0 +1,15 @@
+# Template kustomization: shows how to compose with the platform base
+# Copy this directory and customize for your agent implementation.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openclaw
+resources:
+# Platform base provides: namespace, PVCs, quotas, PDB, RBAC
+- ../../platform/base
+# Uncomment to include A2A auth stack:
+# - ../../platform/auth-identity-bridge
+# Your agent resources:
+- deployment.yaml
+# Add your own ConfigMaps, Secrets, Services here:
+# - my-agent-config.yaml
+# - my-agent-service.yaml

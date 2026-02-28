@@ -1,0 +1,15 @@
+# Platform base: generic K8s resources for the trusted A2A network platform
+# Provides namespace scaffolding, RBAC, quotas, PVCs, network policy, PDB
+# Agent implementations compose with this base via kustomize resources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openclaw
+resources:
+- namespace.yaml
+- openclaw-home-pvc-persistentvolumeclaim.yaml
+- openclaw-workspace-pvc-persistentvolumeclaim.yaml
+- openclaw-resourcequota.yaml
+- openclaw-poddisruptionbudget.yaml
+# openclaw-networkpolicy.yaml  # TODO: Fix egress rules for OAuth proxy
+- openclaw-oauth-serviceaccount.yaml
+- openclaw-oauth-config-secret.yaml

@@ -1,0 +1,28 @@
+# OpenClaw OpenShift overlay
+# Composes:
+#   - agents/openclaw/base (which includes platform/base + auth-identity-bridge)
+#   - OpenClaw-specific patches (config, secrets, deployment with oauth-proxy)
+#
+# Cluster-scoped resources (OAuthClient, SCC, SCC-RBAC) are applied separately
+# by setup.sh since they require cluster-admin and can't go through kustomize
+# namespace transformer.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${OPENCLAW_NAMESPACE}
+resources:
+  - ../../base
+patches:
+  - path: secrets-patch.yaml
+  - path: config-patch.yaml
+  - path: deployment-patch.yaml
+  # Auto-generate route hostname
+  - target:
+      kind: Route
+      name: openclaw
+    patch: |
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: openclaw
+      spec:
+        host: ""

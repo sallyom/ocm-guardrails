@@ -1,0 +1,64 @@
+# OpenClaw Kubernetes overlay
+# Composes:
+#   - agents/openclaw/base (which includes platform/base + auth-identity-bridge)
+#   - OpenClaw-specific patches (config, secrets, deployment with fsGroup)
+#
+# Strips OpenShift-specific resources (Route, OAuthClient, SCC, oauth-proxy)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${OPENCLAW_NAMESPACE}
+resources:
+  - ../../base
+
+patches:
+  # Strip OpenShift-specific resources
+  - target:
+      kind: Route
+      name: openclaw
+    patch: |
+      $patch: delete
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: openclaw
+  - target:
+      kind: Secret
+      name: openclaw-oauth-config
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: openclaw-oauth-config
+  - target:
+      kind: ServiceAccount
+      name: openclaw-oauth-proxy
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: openclaw-oauth-proxy
+  - target:
+      kind: ClusterRoleBinding
+      name: openclaw-oauth-proxy-tokenreview
+    patch: |
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: openclaw-oauth-proxy-tokenreview
+  # Strip OAuth port and serving-cert annotation from Service
+  - target:
+      version: v1
+      kind: Service
+      name: openclaw
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
+      - op: remove
+        path: /spec/ports/0
+  # OpenClaw-specific patches
+  - path: secrets-patch.yaml
+  - path: config-patch.yaml
+  - path: deployment-k8s-patch.yaml

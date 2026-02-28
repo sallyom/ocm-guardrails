@@ -1,0 +1,73 @@
+# Template agent deployment
+# Replace placeholders with your agent's values:
+#   AGENT_IMAGE  -- your container image (e.g., quay.io/myorg/my-agent:latest)
+#   AGENT_PORT   -- the port your agent listens on (e.g., 8080)
+#   /healthz     -- your health check endpoint path
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-agent
+  namespace: openclaw
+  labels:
+    app: my-agent
+    app.kubernetes.io/name: my-agent
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-agent
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: my-agent
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: 'AGENT_PORT'
+        # Uncomment for OTEL sidecar injection:
+        # sidecar.opentelemetry.io/inject: "openclaw-sidecar"
+    spec:
+      containers:
+      - name: agent
+        image: AGENT_IMAGE
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8080  # Replace with AGENT_PORT
+          protocol: TCP
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 100m
+          limits:
+            memory: 1Gi
+            cpu: 500m
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL

@@ -1,0 +1,9 @@
+# Platform overlay: OpenShift-specific resources
+# Provides OAuth proxy, Route, SCC RBAC, OAuthClient
+# NOT standalone -- agent overlays include this as additional resources.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${OPENCLAW_NAMESPACE}
+resources:
+- oauthclient.yaml
+- scc-rbac.yaml

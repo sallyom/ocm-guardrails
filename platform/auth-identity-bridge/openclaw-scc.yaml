@@ -2,7 +2,8 @@
 # Grants only the specific capabilities needed for SPIFFE/Envoy sidecar pattern
 # while preserving OpenShift's namespace UID assignment (MustRunAsRange)
 #
-# Why not privileged? This SCC documents exactly what's needed:
+# Why not fully privileged? This SCC documents exactly what's needed:
+#   - privileged init container: proxy-init sets up iptables (webhook-injected)
 #   - NET_ADMIN/NET_RAW: proxy-init iptables rules (transparent interception)
 #   - spc_t SELinux: SPIRE CSI volume access
 #   - CSI volumes: SPIRE agent socket
@@ -47,7 +48,7 @@ volumes:
 # Filesystem
 readOnlyRootFilesystem: false
 # Privilege
-allowPrivilegedContainer: false
+allowPrivilegedContainer: true  # Required for webhook-injected proxy-init (iptables setup)
 allowPrivilegeEscalation: true
 # Host access (none needed)
 allowHostDirVolumePlugin: false

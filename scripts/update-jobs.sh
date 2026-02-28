@@ -2,7 +2,7 @@
 # ============================================================================
 # UPDATE OPENCLAW INTERNAL CRON JOBS
 # ============================================================================
-# Discovers JOB.md files in manifests/openclaw/agents/*/JOB.md and writes
+# Discovers JOB.md files in agents/openclaw/agents/*/JOB.md and writes
 # OpenClaw's internal cron/jobs.json to the pod.
 #
 # JOB.md format:
@@ -84,7 +84,7 @@ fi
 
 # ---- Discover JOB.md files ----
 
-AGENTS_DIR="$REPO_ROOT/manifests/openclaw/agents"
+AGENTS_DIR="$REPO_ROOT/agents/openclaw/agents"
 JOB_FILES=()
 
 for job_file in "$AGENTS_DIR"/*/JOB.md; do

@@ -1,0 +1,22 @@
+# A2A agent card served at /.well-known/agent.json
+# The Kagenti operator fetches this to populate the agent in the UI.
+# Fields match AgentCardData struct in kagenti-operator.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-agent-card
+  namespace: openclaw
+  labels:
+    app: openclaw
+data:
+  agent.json: |
+    {
+      "name": "openclaw",
+      "description": "OpenClaw AI Agent Gateway",
+      "version": "1.0.0",
+      "url": "http://openclaw:18789",
+      "capabilities": {
+        "streaming": true,
+        "pushNotifications": false
+      }
+    }
