@@ -1,7 +1,8 @@
 # ClusterSPIFFEID for OpenClaw A2A workloads
 #
 # Registers pods labeled kagenti.io/type=agent in namespaces labeled
-# agentcard=true with SPIRE, issuing SPIFFE IDs of the form:
+# agentcard=true OR kagenti-enabled=true with SPIRE, issuing SPIFFE IDs
+# of the form:
 #   spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>
 #
 # The SPIRE controller manager watches this CR and automatically creates
@@ -14,6 +15,20 @@ spec:
   namespaceSelector:
     matchLabels:
       agentcard: "true"
+  podSelector:
+    matchLabels:
+      kagenti.io/type: agent
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}"
+---
+# Separate ClusterSPIFFEID for openclaw namespaces using kagenti-enabled label
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: kagenti-enabled-agents
+spec:
+  namespaceSelector:
+    matchLabels:
+      kagenti-enabled: "true"
   podSelector:
     matchLabels:
       kagenti.io/type: agent
